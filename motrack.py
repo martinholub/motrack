@@ -37,7 +37,8 @@ step = 10
 sigmaX = 1
 kSize = (3, 3)
 pad = 10
-
+boxList = []
+timeList = []
 #############################################################
 ############## FUNCTION DEFINITIONS #########################
 #############################################################
@@ -118,15 +119,37 @@ def getprobmask_hsv(frame_avg, roi_hist):
 	prob_mask = cv2.calcBackProject(images = [frame_avg_hsv], channels = [0], hist = roi_hist, ranges = [0, 180], scale = 1) 
 	return prob_mask
 	############################################################
-def evaldist(pts):
-	Xs = [p[0] for p in pts]
-	Ys = [p[1] for p in pts]
-	cX = np.mean(Xs, dtype = np.uint8)
-	cY = np.mean(Ys, dtype = np.uint8)
-	
-	
-	# cX = 
-	pass
+def evaldist(boxList, timeList):
+	'''
+	'''
+	cents = [] # List of centroids
+	# Open file to save postprocessed data
+	with open("data.txt", "w") as f:
+		f.write("No.,cX,cY,time,dist") # Write header
+		for i, pts in enumerate(boxList):
+			# Pull out vertex coordinates
+			Xs = [p[0] for p in pts]
+			Ys = [p[1] for p in pts]
+			# Get mean coordinates in X and Y -> centroid of bbox
+			cX = np.mean(Xs, dtype = np.float32)
+			cY = np.mean(Ys, dtype = np.float32)
+			# Append coordinates to list
+			cents.append((cX, cY))
+			time = timeList[i] # Pull out time 
+			if i > 0 : # Compute distance traveled
+				dx = (cX - cents[i-1][0])
+				dy = (cY - cents[i-1][1])
+				dist = sqrt(dx**2 + dy**2)
+			else: 
+				dist = 0;	# We dont have information on previous location
+			# dump to file
+			f.write("{:d},{:0.2f},{:0.2f},{:0.2f},{:0.2f}".format(i, cX, cY, time, dist))
+			# Incement distance and time tracker
+			totDist += dist # in pixels - will need to calibrate??
+			totTime += time # in seconds
+		# Wite total distance and time to file
+		f.write("Total dist in pix: {0.4f}".format(totDist))
+		f.write("Total timein sec: {0.4f}".format(totTime))
 	############################################################
 
 def motracker(video_src):
@@ -167,6 +190,7 @@ def motracker(video_src):
 		if frame is None: print ("End of stream"); break;
 		# Get current time
 		time = float(frame_count)/fps
+		timeList.append(time) #Save time 
 		# Normalize pixel values between 0 and 255
 		frame_avg = cv2.normalize(frame_avg, frame_avg, alpha=0, beta=255,
 		norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
