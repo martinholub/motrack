@@ -33,12 +33,13 @@ ap.add_argument("-v", "--video", type = str, help= "path to the video file")
 ##############################################################
 ## Define global variables
 alpha = 0.5
-step = 10
+step = 5
 sigmaX = 1
 kSize = (3, 3)
 pad = 10
 boxList = []
 timeList = []
+centList = []
 #############################################################
 ############## FUNCTION DEFINITIONS #########################
 #############################################################
@@ -47,6 +48,7 @@ def startdebug():
 	# Fire up debugger
 	pdb.set_trace()
 ############################################################
+
 def debugPlot(im, bbox, mask,  roi, roi_mask):
 	plt.close()
 	fig, ax = plt.subplots(2, 2, figsize = (10, 8))
@@ -62,6 +64,7 @@ def debugPlot(im, bbox, mask,  roi, roi_mask):
 	ax[1, 1].imshow(roi_mask, cmap = plt.cm.gray)
 	plt.show()
 ############################################################
+
 def labelthresh(frame_avg, bbox, pad):
 	'''
 	Here we try to facilitate object tracking by creating first thresholding in roi and then creating a binary mask. This may not be necessary and may not work.
@@ -98,6 +101,7 @@ def labelthresh(frame_avg, bbox, pad):
 	bbox = (bboxRP[1], bboxRP[0], int(bboxRP[3] - bboxRP[1]), int(bboxRP[2] - bboxRP[0]))
 	return bbox, mask, frame_avg_gray
 	#############################################################
+
 def getroihist(frame, bbox, pad):
 	# Setup ROI for tracking. We will be basically looking maximum correlation of HSV histogram of the roi (our template of animal) across subsequent frames.
 	# Pad the bbox for added robustness (?)
@@ -113,45 +117,52 @@ def getroihist(frame, bbox, pad):
 	cv2.normalize(roi_hist, roi_hist, alpha=0, beta=255, norm_type = cv2.NORM_MINMAX)
 	return roi_hist
 	############################################################
+
 def getprobmask_hsv(frame_avg, roi_hist):
 
 	frame_avg_hsv = cv2.cvtColor(frame_avg, cv2.COLOR_BGR2HSV)
 	prob_mask = cv2.calcBackProject(images = [frame_avg_hsv], channels = [0], hist = roi_hist, ranges = [0, 180], scale = 1) 
 	return prob_mask
 	############################################################
-def evaldist(boxList, timeList):
+
+def evaldist(centList, timeList):
 	'''
 	'''
-	cents = [] # List of centroids
+	# Initalize variables that hold sums
+	totDist = 0
 	# Open file to save postprocessed data
 	with open("data.txt", "w") as f:
-		f.write("No.,cX,cY,time,dist") # Write header
-		for i, pts in enumerate(boxList):
-			# Pull out vertex coordinates
-			Xs = [p[0] for p in pts]
-			Ys = [p[1] for p in pts]
-			# Get mean coordinates in X and Y -> centroid of bbox
-			cX = np.mean(Xs, dtype = np.float32)
-			cY = np.mean(Ys, dtype = np.float32)
-			# Append coordinates to list
-			cents.append((cX, cY))
+		f.write("No.,cX,cY,time,dist\n") # Write header
+		for i, cent in enumerate(centList):
+			# Pull out (X, Y) coords
+			cX = cent[0]
+			cY = cent[1]
 			time = timeList[i] # Pull out time 
 			if i > 0 : # Compute distance traveled
-				dx = (cX - cents[i-1][0])
-				dy = (cY - cents[i-1][1])
-				dist = sqrt(dx**2 + dy**2)
+				dx = (cX - centList[i-1][0])
+				dy = (cY - centList[i-1][1])
+				dist = np.sqrt(dx**2 + dy**2)
 			else: 
 				dist = 0;	# We dont have information on previous location
 			# dump to file
-			f.write("{:d},{:0.2f},{:0.2f},{:0.2f},{:0.2f}".format(i, cX, cY, time, dist))
-			# Incement distance and time tracker
+			f.write("{:d},{:0.2f},{:0.2f},{:0.2f},{:0.2f}\n".format(i, cX, cY, time, dist))
+			# Incement distance tracker
 			totDist += dist # in pixels - will need to calibrate??
-			totTime += time # in seconds
 		# Wite total distance and time to file
-		f.write("Total dist in pix: {0.4f}".format(totDist))
-		f.write("Total timein sec: {0.4f}".format(totTime))
+		f.write("Total dist in pix: {:0.4f}\n".format(totDist))
+		f.write("Total timein sec: {:0.4f}\n".format(timeList[-1]))
+	# f.close() is implicit
 	############################################################
-
+def getcent(pts):
+	# Pull out vertex coordinates
+	Xs = [p[0] for p in pts]
+	Ys = [p[1] for p in pts]
+	# Get mean coordinates in X and Y -> centroid of bbox
+	cX = np.mean(Xs, dtype = np.float32)
+	cY = np.mean(Ys, dtype = np.float32)
+	# Append coordinates to list
+	return (cX, cY)
+	
 def motracker(video_src):
 	# Capture video
 	vid = cv2.VideoCapture(video_src)
@@ -160,9 +171,9 @@ def motracker(video_src):
 	if not ok: print ('Cannot read video file'); sys.exit();
 	
 	#Define an initial bounding box
-	# bbox = (126, 23, 188, 164)
+	bbox = (158, 26, 161, 163)
 	# Uncomment the line below to select a different bounding box
-	bbox = cv2.selectROI("Tracking", frame, fromCenter = False, showCrosshair = False)
+	# bbox = cv2.selectROI("Tracking", frame, fromCenter = False, showCrosshair = False)
 	
 	roi_hist = getroihist(frame, bbox, pad)
 	
@@ -182,7 +193,7 @@ def motracker(video_src):
 			# Running average
 			ret, frame = vid.read() # read next frame 
 			if frame is None: break; # if stack empty, break
-			frame = frame.astype(np.uint8) # convert to float for opencv
+			frame = frame.astype(np.uint8) # assure format, uint8
 			# Accumulate running average
 			cv2.accumulateWeighted(frame, frame_avg, alpha)
 				
@@ -212,8 +223,6 @@ def motracker(video_src):
 		# Define colors
 		red = (0, 0, 255)
 		black = (0, 0, 0)
-		# Draw location of center of mass on the average image
-		# cv2.circle(frame_avg, cent, radius = 3, color = red)
 		# Put timestamp on the average image
 		time_str = "{:.2f}".format(time)
 		dimy, dimx, _ = frame_avg.shape
@@ -226,23 +235,25 @@ def motracker(video_src):
 		# Different way how to draw a box
 		pts = cv2.boxPoints(ret)
 		pts = np.int64(pts)
-		startdebug()
 		frame_avg = cv2.polylines(img = frame_avg, pts = [pts],isClosed = True, color = red, thickness = 2)
+		# Get centroid of bbox, append to List
+		cent = getcent(pts)
+		centList.append(cent)
+		# Draw location of center of mass on the average image
+		cv2.circle(frame_avg, cent, radius = 4, color = red, thickness = 4)
 		
 		# Plot all the average frame
 		# Image should be uint8 to be drawable in 0, 255 scale
 		# https://stackoverflow.com/questions/9588719/opencv-double-mat-shows-up-as-all-white
 		cv2.imshow('Tracking', frame_avg)
-		
-		# Next you need to:
-		# - save current position of bbox centroid and evaluate distance traveled
-		# - save the elapsed time
-		# - Make the search more robust (try different hardcoded values, some more filtering, ...)
-		# Have one function for the same part of algorithm, but pass different flags to have different aproaches
-		
+				
 		# Interrup on ESC
 		ch = 0xFF & cv2.waitKey(60)
 		if ch == 27: break;
+	############################################################ end while True:
+	# Run postprocessing functions
+	evaldist(centList, timeList)
+	# release video object
 	vid.release()
 
 def main():
@@ -261,4 +272,9 @@ def main():
 
 if __name__ == '__main__':
 	main()
-	
+# Next you need to:
+# - save current position of bbox centroid and evaluate distance traveled = OK
+# - save the elapsed time = OK
+# - Create projection matrix and use it to get real distance traveled
+# - Make the search more robust (try different hardcoded values, some more filtering, ...)
+# Have one function for the same part of algorithm, but pass different flags to have different aproaches
