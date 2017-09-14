@@ -1,5 +1,6 @@
 # Custom files/folders
 videos/*
+resources/*.png
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
