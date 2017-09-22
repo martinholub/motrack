@@ -65,7 +65,8 @@ def order_points(pts, ratio = 1):
     
     # return the coordinates in top-left, top-right,
     # bottom-right, and bottom-left order
-    return np.array([tl, tr, br, bl], dtype="int32") * ratio
+    pts_out = np.array([tl, tr, br, bl], dtype="int32") * ratio
+    return pts_out
    
 def fit_undistort(frame, mtx, dist, refit = False):
     '''
@@ -211,8 +212,25 @@ def select_roi_video(video_src, release = False):
 
 def go_to_frame(vid, frame_pos, video_source, return_frame = False):
     """Jump to frame poisition in video
+    
+    Parameters
+    ----------
+    vid : cv2.VideoCapture object
+        Already opened video object. If empty, video from video_source is read. 
+    video_source : str
+        path to video file
+    frame_pos : float
+        number of frame corresponding to current position in video [default = []]
+    retrun_frame : 
+        whether to also return next frame after setting position [default=True]
+        
+    Returns
+    ----------
+    ret_tuple : tuple
+        pair of (vid, frame) or (vid, []) if return_frame is False
+    
     """
-    if not (vid):
+    if (not vid) and video_source:
         vid = cv2.VideoCapture(video_source)  
     if not (frame_pos):
         num_frames = vid.get(cv2.CAP_PROP_FRAME_COUNT)
@@ -225,7 +243,7 @@ def go_to_frame(vid, frame_pos, video_source, return_frame = False):
         if not retval: print ('Cannot read video file'); sys.exit();
         ret_tuple = (vid, frame)
     else: 
-        ret_tuple = vid
+        ret_tuple = (vid, [])
         
     return ret_tuple
     
@@ -331,7 +349,8 @@ def mask_box_ellip(image, ellip):
     mask = np.zeros_like(image, dtype = np.uint8)
     cv2.ellipse(mask, ellip, color = (255, 255, 255), thickness = 7)
     # [0] selects the longest contour
-    contour = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[1][0]
+    contour = cv2.findContours( mask.copy(), cv2.RETR_EXTERNAL,
+                                cv2.CHAIN_APPROX_SIMPLE)[1][0]
     
     rect = cv2.minAreaRect(contour)
     box = cv2.boxPoints(rect)
@@ -444,7 +463,7 @@ def affine_transform_warped(warped_mask):
     M : 2x2 array
         affine transformation matrix
     """
-    contour = cv2.findContours( warped_mask, cv2.RETR_EXTERNAL,
+    contour = cv2.findContours( warped_mask.copy(), cv2.RETR_EXTERNAL,
                                 cv2.CHAIN_APPROX_SIMPLE)[1][0]
     
     circ = cv2.minEnclosingCircle(contour)
@@ -475,7 +494,7 @@ def affine_transform_warped(warped_mask):
     M = np.round(M, decimals = 3)
     return M
     
-def projective_transform(image, mask):
+def projective_transform(image, mask, D):
     """Obtain and apply projective transformtion
     
     Requires roi to have sufficient padding!
@@ -486,6 +505,8 @@ def projective_transform(image, mask):
         grayscale image of region of interest
     mask : 2D array
         boolean mask of the full ellipse contour
+    D : float
+        diameter of circular object in real-world dimensions [mm]
     
     Returns
     -----------
@@ -494,7 +515,7 @@ def projective_transform(image, mask):
     warped : 2D array
         projective transformed image
     """
-    contour = cv2.findContours( mask, cv2.RETR_EXTERNAL,
+    contour = cv2.findContours( mask.copy(), cv2.RETR_EXTERNAL,
                                 cv2.CHAIN_APPROX_SIMPLE)[1][0]
     
     circ = cv2.minEnclosingCircle(contour)
@@ -526,9 +547,33 @@ def projective_transform(image, mask):
     warped_mask = cv2.warpPerspective(mask, M, (cols, rows))
     warped = cv2.warpPerspective(image, M, (cols, rows))
     
+    scaling_factor = find_scale(warped_mask, D = D)
     np.save("projection_matrix.npy", M)
+    np.save("scaling_factor.npy", scaling_factor)
         
-    return M, warped, warped_mask
+    return M, scaling_factor, warped, warped_mask
+    
+def find_scale(warped_mask, D):
+    """ Find scaling between image and real world dimensions
+    
+    Parameters
+    -------------
+    warped_mask : ndarray
+        rectified image of a circular object
+    D : float
+        diameter of circular object in real-world dimensions [mm]
+        
+    Returns
+    -------------
+    scaling : float
+        scaling factor [mm / pixel]
+    """
+    contour = cv2.findContours( warped_mask.copy(), cv2.RETR_EXTERNAL,
+                            cv2.CHAIN_APPROX_SIMPLE)[1][0]
+    perim = cv2.arcLength(contour, closed = True)
+    diameter = perim / np.pi
+    scaling = D / diameter
+    return scaling
     
     
 def debug_points(image, ellip, circ, pts1, pts2, pad = 0):
@@ -581,7 +626,7 @@ def main():
     contour, gray = find_contours(roi)
     ellip, _, _= fit_ellipse(contour, gray)
     box, mask, _ = mask_box_ellip(gray, ellip)
-    M, _, _ = projective_transform(gray, mask)
+    M, sf, _, _ = projective_transform(gray, mask, D = 1000)
     
 if __name__ == '__main__':
     main()
