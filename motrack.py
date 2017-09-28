@@ -74,7 +74,7 @@ def debug_plot2(frame, pts, roi):
     ax2.imshow(roi, cmap = "gray")
     plt.show()
 
-def label_thresh(frame_avg, bbox, pad):
+def label_thresh(frame_avg, kSize, sigmaX):
     """Find binary image of object of interest
     
     Facilitate object tracking by first thresholding roi and then creating
@@ -92,30 +92,43 @@ def label_thresh(frame_avg, bbox, pad):
     
     """
     frame_avg_gray = cv2.cvtColor(frame_avg, cv2.COLOR_BGR2GRAY)
-    frame_avg_gray = cv2.GaussianBlur(frame_avg_gray, kSize, sigmaX)
-    frame_roi = frame_avg_gray[int(bbox[1] - pad) : int(bbox[1] + bbox[3] + pad),
-                               int(bbox[0] - pad) : int(bbox[0] + bbox[2] + pad)]
-    # Aply Automatic threshold
-    thresh = threshold_otsu(frame_roi);
-    binary = frame_roi < thresh # May need to change sign for different img
-    selem = diamond(10) 
-    binary_cl = binary_closing(binary, selem)
-    # Create mask where we will put our thresholded object
-    mask = np.zeros_like(frame_avg_gray, dtype = np.uint8)
-    # Put the boundig box into the mask
-    mask[   int(bbox[1] - pad) : int(bbox[1] + bbox[3] + pad),
-            int(bbox[0] - pad) : int(bbox[0] + bbox[2] + pad)] = binary_cl
-    # Label connected components
-    binary_label = label(mask)
-    # Extract location of centroid and bbox of the thresholded object
-    binary_props = regionprops(binary_label)
-    cent=(int(binary_props[0].centroid[0]), int(binary_props[0].centroid[1]))       
-    bboxRP = binary_props[0].bbox
-    # We need to shuffle the dimensions quite a bit
-    bbox = (bboxRP[1], bboxRP[0], int(bboxRP[3] - bboxRP[1]), int(bboxRP[2] - bboxRP[0]))
-    return bbox, mask, frame_avg_gray
+    #frame_avg_gray = cv2.GaussianBlur(frame_avg_gray, kSize, sigmaX)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(5,5))
+    edged = cv2.Canny(frame_avg_gray, threshold1 = 0, threshold2 = 255)
+    edged = cv2.dilate(edged, kernel = kernel, iterations=1)
+    
+    cnts = cv2.findContours(
+                    edged.copy(),cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)[1]
+    # sort by area, keep top 10
+    cnts = sorted(cnts, key = cv2.contourArea, reverse = True)[:1]
+    vis_img = np.zeros_like(frame_avg_gray, dtype = np.uint8)
+    cv2.drawContours(vis_img, cnts, contourIdx = -1, 
+                    color = (255, 255, 255), thickness =  -1)
+    
+    # # Aply Automatic threshold
+    # thresh = threshold_otsu(frame_roi);
+    # binary = frame_roi < thresh # May need to change sign for different img
+    # selem = diamond(10) 
+    # binary_cl = binary_closing(binary, selem)
+    # # Create mask where we will put our thresholded object
+    # mask = np.zeros_like(frame_avg_gray, dtype = np.uint8)
+    # # Put the boundig box into the mask
+    # mask[   int(bbox[1] - pad) : int(bbox[1] + bbox[3] + pad),
+            # int(bbox[0] - pad) : int(bbox[0] + bbox[2] + pad)] = binary_cl
+    # # Label connected components
+    # binary_label = label(mask)
+    # # Extract location of centroid and bbox of the thresholded object
+    # binary_props = regionprops(binary_label)
+    # cent=(int(binary_props[0].centroid[0]), int(binary_props[0].centroid[1]))       
+    # bboxRP = binary_props[0].bbox
+    # # We need to shuffle the dimensions quite a bit
+    # bbox = (bboxRP[1], bboxRP[0], int(bboxRP[3] - bboxRP[1]), int(bboxRP[2] - bboxRP[0]))
+    # return bbox, mask, frame_avg_gray
+    
+    return vis_img
 
-def get_roi_hist(roi_rgb, vid, frame_pos = []):
+def get_roi_hist(   roi_rgb, vid, background = np.empty(0), frame_pos = [], 
+                    reinitialize = False):
     """Converts ROI to histogram
     
     Parameters
@@ -146,7 +159,9 @@ def get_roi_hist(roi_rgb, vid, frame_pos = []):
         video_source = vid
         vid = []
     
-    (hsv_lowerb, hsv_upperb) = select_hsv_range(vid, video_src, frame_pos)
+    (hsv_lowerb, hsv_upperb) = select_hsv_range(vid, video_src, background,
+                                                frame_pos, reinitialize)
+    startdebug()
     chs = [1, 2]
     h_sizes = [256, 256]
     h_ranges = [0, 256, 0, 256]
@@ -160,7 +175,8 @@ def get_roi_hist(roi_rgb, vid, frame_pos = []):
                     norm_type = cv2.NORM_MINMAX)
     return roi_hist, h_sizes, h_ranges, chs
 
-def select_hsv_range(vid, video_source, frame_pos = [], reinitialize = False):
+def select_hsv_range(   vid, video_source, background = np.empty(0), 
+                        frame_pos = [], reinitialize = False):
     """Select object hsv range
     
     Interactively selects HSV ranges that threshold tracked object against background
@@ -191,6 +207,11 @@ def select_hsv_range(vid, video_source, frame_pos = [], reinitialize = False):
     if reinitialize:
         (_, frame) = getcoords.go_to_frame( vid, frame_pos, video_source, 
                                             return_frame =True)
+        frame_avg = np.zeros_like(frame, dtype = np.float32)
+        frame, _, _ = average_frames(vid, 5, .5, 0, frame_avg)
+        if background.size:
+            frame = subtract_background(frame, background)
+                    
         frame, _ = getcoords.resize_frame(frame, height = 500)
                 
         hh='Hue High'
@@ -238,8 +259,12 @@ def select_hsv_range(vid, video_source, frame_pos = [], reinitialize = False):
         finally:
             cv2.destroyAllWindows()
     else: # apply preset
-        hsv_lowerb = np.array([0, 50, 0])
-        hsv_upperb = np.array([179, 160, 100])
+        if background.size : 
+            hsv_lowerb = np.array([0, 0, 100])
+            hsv_upperb = np.array([179,200,255])
+        else:
+            hsv_lowerb = np.array([0, 50, 0]) # without bg substraction
+            hsv_upperb = np.array([179, 160, 100]) # without bg substraction
         
     return (hsv_lowerb, hsv_upperb)
     
@@ -269,7 +294,6 @@ def prob_mask_hsv(frame_avg, roi_hist, h_ranges, chs):
     prob_mask = cv2.calcBackProject(images = [frame_avg_hsv], channels = chs, 
                                     hist = roi_hist, ranges =h_ranges, scale= 1) 
     return prob_mask
-    ############################################################
 
 def output_data(centroids, times):
     """Writes select data into text file
@@ -337,6 +361,7 @@ def rectangle_to_centroid(pts):
     (cX, cY) : tuple
         x and y coordinates of centroid 
     """
+    pts = np.int64(pts)
     # Pull out vertex coordinates
     Xs = [p[0] for p in pts]
     Ys = [p[1] for p in pts]
@@ -373,19 +398,126 @@ def from_preset(video_src):
     
     return pts, roi, vid, frame_pos, frame
     
+def bbox_to_pts(bbox):
+    """Converts tuple of 4 values to bbox vertices 
+    """
+    pts = np.array([[ bbox[0], bbox[1]], #[tl, tr, br, bl]
+                    [ bbox[0]+ bbox[2], bbox[1]],
+                    [ bbox[0]+ bbox[2], bbox[1]+ bbox[3]],
+                    [ bbox[0], bbox[1]+ bbox[3]]], dtype = np.int32) 
+    pts = getcoords.order_points(pts)
+    return pts
+
+def pts_to_bbox(pts):
+    """Converts 4 x,y coordinate pairs to corresponding bbox tuple
+    """
+    pts = getcoords.order_points(pts)
+    bbox = (pts[0], pts[1], pts[2] - pts[0], pts[3] - pts[1])
+    return bbox
+
+def tracker(prob_mask, bbox, term_crit, type = "meanShift"):
+    """Tracks an object in image
     
-def motracker(video_src, reinitialize = False):
+    The function is to be extended at will to achieve reliable tracking of given
+    object.
+    
+    Parameters
+    ---------------
+    type : str
+        Defines the tracking method to use
+    
+    Returns
+    -----------
+    bbox : ndarray
+    pts : ndarray
+    """
+     # Apply meanshift to update object
+    if type == "meanShift":
+        ret, bbox = cv2.meanShift(prob_mask, bbox, term_crit)
+        pts = bbox_to_pts(bbox)
+    elif type == "CamShift":    
+        ret, bbox = cv2.CamShift(prob_mask, bbox, term_crit)
+        pts = cv2.boxPoints(ret)
+    return (bbox, pts)
+
+def segment_background(frame, pts):
+    """Substract stationary background
+    
+    """
+    frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    mask = np.zeros_like(frame_gray)
+    bbox = cv2.boundingRect(pts)
+    pts = swap_coords_2d(pts)
+    y_pad = 140 # cover also mouse tail
+    mask[pts[0][0]:pts[1][0], pts[0][1]:pts[2][1] + y_pad] = 1
+    
+    frame_corrupt = frame.copy()
+    frame_corrupt[mask == True] = 0
+    frame_inpaint = cv2.inpaint(frame_corrupt, mask, inpaintRadius = 5,
+                                flags = cv2.INPAINT_NS)
+    
+    bgd_model = np.zeros((1,65), dtype = np.float64)
+    fgd_model = np.zeros((1,65), dtype = np.float64)
+    frame_segment = frame.copy()
+    mask_segment = np.zeros(frame.shape[:2],np.uint8)
+    cv2.grabCut(frame_segment, mask_segment, bbox, bgd_model, fgd_model,
+                iterCount = 3, mode = cv2.GC_INIT_WITH_RECT)
+    
+    # 1 = obvious FGD, 3 = Possible FGD
+    mask_fgd = np.where((mask_segment==1) | (mask_segment==3),1,0).astype('uint8')
+    #img = cv2.bitwise_and(frame, frame, mask= mask_fgd)
+    #frame_segment[mask_fgd == 0, :] = 0
+
+    return frame_inpaint, mask_fgd
+
+def subtract_background(frame, background, mask_fgd = np.empty(0)):
+    """Subtract background level from ROI image
+    """
+    if frame.dtype.type is not np.uint8:
+        frame = frame.astype(np.uint8)
+    if mask_fgd.size:
+        mask = np.invert(mask_fgd, dtype = np.uint8)
+        frame_bg_removed = cv2.subtract(background, frame, mask = mask)
+    else:
+        frame_bg_removed = cv2.subtract(background, frame)
+   
+    cv2.normalize(  src = frame_bg_removed, dst = frame_bg_removed,
+                alpha = 0, beta = 255, norm_type = cv2.NORM_MINMAX)
+    
+    return frame_bg_removed
+
+def average_frames(vid, step, alpha, frame_count, frame_avg):    
+    frame_count += 1 * step
+    
+    for i in range(step):
+        # Running average
+        ret, frame = vid.read()
+        if frame is None: break; # if stack empty, break
+        frame = frame.astype(np.uint8)
+        # Accumulate running average with alpha weighting
+        cv2.accumulateWeighted(src = frame, dst = frame_avg, alpha = alpha)
+    return frame_avg, frame_count, frame
+    
+def track_motion(video_src, remove_bg = False, reinitialize = False):
 
     if reinitialize:
         pts, roi, vid, frame_pos, frame = getcoords.select_roi_video(video_src)
     else:
         pts, roi, vid, frame_pos, frame = from_preset(video_src)
-                     
-    roi_hist, sizes, ranges, chs = get_roi_hist(roi, vid, frame_pos)
-
+        
     # Convert between different rectangle representations
     pts = swap_coords_2d(pts)
     bbox = cv2.boundingRect(pts)
+    
+    if remove_bg : 
+        background, mask_fgd = segment_background(frame, pts)
+        frame_bg_removed = subtract_background(frame, background)
+        roi = frame_bg_removed[pts[0][0]:pts[1][0], pts[0][1]:pts[2][1],:]
+    else :
+        background = np.empty(0);
+    
+    roi_hist, sizes, ranges, chs = get_roi_hist(roi, vid, background, frame_pos,
+                                                reinitialize)
     
     # Setup the termination criteria, either 10 iteration or move by atleast 1 pt
     term_crit = ( cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 1 )
@@ -395,37 +527,27 @@ def motracker(video_src, reinitialize = False):
     # Lists to temporalily store output data
     times = []
     centroids = []
-    
+        
     while vid.isOpened():
         frame_avg = np.zeros_like(frame, dtype = np.float32)
-        frame_count += 1 * step
-        
-        for i in range(step):
-            # Running average
-            ret, frame = vid.read()
-            if frame is None: break; # if stack empty, break
-            frame = frame.astype(np.uint8)
-            # Accumulate running average with alpha weighting
-            cv2.accumulateWeighted(src = frame, dst = frame_avg, alpha = alpha)
-            
+        frame_avg, frame_count, frame = average_frames( vid, step, alpha,
+                                                        frame_count, frame_avg)    
         # Break also out of this loop if emptied stack      
         if frame is None: print ("End of stream"); break;
         
         time = float(frame_count)/fps
         times.append(time) #Save time 
+        if remove_bg:
+            frame_avg = subtract_background(frame_avg, background)
+            #frame_avg = cv2.subtract(background.astype(np.float32), frame_avg)
         
         # Normalize pixel values between 0 and 255
-        frame_avg = cv2.normalize(  frame_avg, frame_avg, alpha=0, beta=255,
-                                    norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+        #frame_avg = cv2.normalize(  frame_avg, frame_avg, alpha=0, beta=255,
+         #                           norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
         
-
         prob_mask = prob_mask_hsv(frame_avg, roi_hist, ranges, chs)
+        (bbox, pts) = tracker(prob_mask, bbox, term_crit, "meanShift")
         
-        # Apply meanshift to update object
-        ret, bbox = cv2.CamShift(prob_mask, bbox, term_crit)
-        
-        pts = cv2.boxPoints(ret)
-        pts = np.int64(pts)
         cent = rectangle_to_centroid(pts)
         centroids.append(cent)
         
@@ -464,7 +586,7 @@ def main():
     print(__doc__)
     # Assure that all windows get destroyed at the end of the run
     try:
-        motracker(video_src)
+        track_motion(video_src)
     finally:
         cv2.destroyAllWindows()
 
