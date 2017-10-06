@@ -151,7 +151,7 @@ def apply_pad(image, pad, mode = 'symmetric'):
     
     return image
         
-def select_roi_video(video_src, release = False):
+def select_roi_video(video_src, release = False, show_frames = True):
     """Select a ROI from arbitrary video frame.
     
     Prompts the user to pause video and interactivelly select ROI.
@@ -180,7 +180,10 @@ def select_roi_video(video_src, release = False):
     # Prompt user to select a good frame we will work on later
     print ("Press key `p` to pause the video and select ROI")
     # Capture video
-    vid = cv2.VideoCapture(video_src)
+    if (type(video_src) is str):
+        vid = cv2.VideoCapture(video_src)
+    else:
+        vid = video_src
     count = 0
     try:
         while vid.isOpened():
@@ -195,10 +198,10 @@ def select_roi_video(video_src, release = False):
                 # Uncomment the line below to select a different bounding box
                 pts, roi = select_roi(frame, win_name = "SelectROI")
                 break # Break from while loop
-
-            # Show the current frame
-            cv2.namedWindow("SelectROI", cv2.WINDOW_NORMAL)
-            cv2.imshow("SelectROI", frame)
+            if show_frames:
+                # Show the current frame
+                cv2.namedWindow("SelectROI", cv2.WINDOW_NORMAL)
+                cv2.imshow("SelectROI", frame)
     finally:
         # Assure all windows closed
         cv2.destroyAllWindows()
