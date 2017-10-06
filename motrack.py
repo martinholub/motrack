@@ -615,20 +615,18 @@ def get_parameter_names(remove_bg, reinitialize_hsv, reinitialize_roi,
     
     names_init = []
     names = []
+    
     if remove_bg and load_bg:
         names.append("background")
-    else:
         names_init.append("background")
+        
     if load_hsv:
         names.append("roi_hist")
-    else:
         names_init.append("roi_hist")
+        
     if load_roi:
         names.append("pts")
-        names.append("frame_pos")
-    else:
-        names_init.append("pts")
-        names_init.append("frame_pos")
+        
         
     return names, names_init
     
@@ -642,13 +640,20 @@ def adjust_flags(init_flag, remove_bg, reinitialize_roi, reinitialize_hsv, save_
         reinitialize_hsv = False
         init_fname = None
         
-def find_param_fnames(video_src, init_flag, save_init):
+def get_in_out_names(video_src, init_flag, save_init):
+    data_out = video_src
+    param_in = video_src
+    
     if init_flag and save_init:
-        param_init_out = make_filename(video_src, "", "init")
-        param_init_in = ""
+        init_out = make_filename(video_src, "", "init")
+    elif init_flag:
+        init_in = None
     else:
-        param_out = video_src
-        param_in
+        init_out = None
+        init_in = make_filename(video_src, "", "init")
+        
+    fnames = [data_out, param_in, init_out, init_in]
+    return fnames
             
     
 def track_motion(   video_src, init_flag = False,
@@ -658,12 +663,18 @@ def track_motion(   video_src, init_flag = False,
                     reinitialize_bg = p.reinitialize_bg,
                     save_init = p.save_init):
     
+    startdebug()
     (pnames, pnames_init) = get_parameter_names(remove_bg, reinitialize_hsv,                                            reinitialize_roi, reinitialize_bg)
+    fnames = get_in_out_names(video_src, init_flag, save_init)
+    
     try:
         if pnames:
-            p_vars = load_tracking_params(video_src, p.ext, pnames)
-        if pnames_init:
-            p_vars = load_tracking_params(video_src, p.ext, pnames)
+            p_vars_curr = load_tracking_params(fnames[1], p.ext, pnames)
+        if pnames_init and init_flag:
+            p_vars_init = load_tracking_params(fnames[3], p.ext, pnames_init)
+        
+        p_vars = {**p_vars_curr, **p_vars_init}
+        
     except:
         print("Some parameters couldn't be loaded")
     
@@ -704,11 +715,14 @@ def track_motion(   video_src, init_flag = False,
     
     save_flags = [reinitialize_roi, reinitialize_hsv, reinitialize_bg]
     if save_init and any(save_flags):
-        names = get_parameter_names(remove_bg, not reinitialize_hsv,
+        names, names_init = get_parameter_names(remove_bg, not reinitialize_hsv,
                                     not reinitialize_roi, not reinitialize_bg)
         local_variables = locals()
         save_dict = dict((n, local_variables[n]) for n in names)
-        save_tracking_params(video_src, save_dict, p.ext)                
+        save_tracking_params(fnames[0], save_dict, p.ext)
+        
+        save_dict_init = dict((n, local_variables[n]) for n in names_init)
+        save_tracking_params(fnames[2], save_dict_init, p.ext)
     
     # Setup the termination criteria, either 10 iteration or move by atleast 1 pt
     term_crit = ( cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, p.its, p.eps )
