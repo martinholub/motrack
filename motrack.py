@@ -19,19 +19,32 @@ import cv2
 import argparse
 import pdb
 import getcoords
-import params as p
 import sys
 import os
-from old_stuff import debug_plot2
-from preprocess import find_frame_video
+#from old_stuff import debug_plot2
 import pickle
 
 # Parse arguments
 ap = argparse.ArgumentParser()
 ap.add_argument("-v", "--video", type = str, help= "path to the video file")
-ap.add_argument("-i", "--init_fname", type = str, help= "filename for initialization")
+ap.add_argument("-p", "--params", type = str, help= "parameter set", 
+                default = "params")
 #ap.add_argument("-nr", "--new-roi", type = bool, help= "Select new roi")
 #ap.add_argument("-nh", "--new-hist", type = bool, help = "Select new hsv range")
+try: 
+    video_src = ap.parse_args().video
+    parameter_set = ap.parse_args().params
+except: 
+    print("Cannot read cmd arguments.")
+    video_src = 0
+    parameter_set = "params"
+
+init_flag = True if parameter_set == "params_init" else False
+
+if init_flag:
+    import params_init as p
+else: 
+    import params as p
 
 def startdebug():
     """Start debugger here
@@ -198,7 +211,7 @@ def select_hsv_range(   vid, video_source, background = np.empty(0),
         
     return (hsv_lowerb, hsv_upperb)
     
-def prob_mask_hsv(frame_avg, roi_hist, h_ranges, chs, **kwargs):
+def prob_mask_hsv(frame_avg, roi_hist, h_ranges, chs, check_area = p.check_area, **kwargs):
     """Compute probability mask based on roi histogram
     
     Look for best match with a historgam in the image.
@@ -225,7 +238,10 @@ def prob_mask_hsv(frame_avg, roi_hist, h_ranges, chs, **kwargs):
     frame_avg_hsv = cv2.cvtColor(frame_avg, cv2.COLOR_BGR2HSV)
     prob_mask = cv2.calcBackProject(images = [frame_avg_hsv], channels = chs, 
                                     hist = roi_hist, ranges =h_ranges, scale= 1)
-    prob_mask, frame_binary = check_min_area(   prob_mask, frame_avg, **kwargs)
+    if check_area:
+        prob_mask, frame_binary = check_min_area(   prob_mask, frame_avg, **kwargs)
+    else:
+        frame_binary = cv2.cvtColor(frame_avg, cv2.COLOR_BGR2GRAY)
             
     return prob_mask, frame_binary
 
@@ -378,7 +394,7 @@ def check_min_area( prob_mask, frame, min_area = p.min_area, type = 2,
     #prob_mask = cv2.bitwise_and(prob_mask, prob_mask, mask= frame_binary)
 
     num_nonzero = np.count_nonzero(frame_binary)
-    if num_nonzero < min_area: 
+    if (num_nonzero < min_area): 
         prob_mask = None
     
     if annotate:
@@ -501,6 +517,37 @@ def subtract_background(frame, background, mask_fgd = np.empty(0)):
                 alpha = 0, beta = 255, norm_type = cv2.NORM_MINMAX)
     
     return frame_bg_removed
+    
+def subtract_stationary_background(fgbg, frame_avg, frame_count, kSize = p.kSize_canny):
+    """Fit mixtore of gaussians as background model
+    """
+    #fgbg = cv2.createBackgroundSubtractorMOG2( history = 500, varThreshold = 16,
+    #                                           detectShadows = True)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, kSize)
+    frame_fgd = fgbg.apply(frame_avg)
+    frame_fgd_binary = np.where(frame_fgd > 0, 255, 0).astype(np.uint8)
+    frame_fgd_binary = cv2.morphologyEx(    frame_fgd_binary, cv2.MORPH_CLOSE,
+                                            kernel, iterations = 3)
+    #frame_fgd = cv2.erode(frame_fgd, kernel = kernel, iterations = 1)
+    #frame_fgd = cv2.dilate(frame_fgd, kernel = kernel, iterations = 5)
+    
+    frame_bgd = np.where(frame_fgd_binary > 0, 0, 1).astype(np.float32)
+
+    new_shape = frame_bgd.shape + (1, )
+    frame_bgd = np.reshape(frame_bgd, new_shape)
+    bg2 = (frame_avg * np.tile(frame_bgd, frame_avg.shape[2])).astype(np.uint8)
+    
+    if frame_count > 25:
+        startdebug()
+    # frame_avg = subtract_background(frame_avg, bg2)
+        frame_avg = frame_avg -  bg2
+        
+        # from old_stuff import debug_plot2
+        # debug_plot2(bg2, pts, frame_avg)
+    
+    # frame_avg = frame_avg - np.prod(frame_avg,frame_fgd, axis=2)
+    # frame_avg = bitwise_and(frame_avg, frame_avg)
+    return frame_avg, frame_fgd
 
 def average_frames(vid, frame_avg, step = 5, alpha = 0.5, frame_count = 0):
     """Running average of frames from video stream
@@ -515,6 +562,62 @@ def average_frames(vid, frame_avg, step = 5, alpha = 0.5, frame_count = 0):
         # Accumulate running average with alpha weighting
         cv2.accumulateWeighted(src = frame, dst = frame_avg, alpha = alpha)
     return frame_avg, frame_count, frame
+    
+def find_frame_video(   video_src, show_frames = False, release = False):
+    """Select a frame from arbitrary video.
+    
+    Prompts the user to select a frame in video.
+    
+    Parameters
+    ----------
+    video_src : str
+        path to video (GOPRO videos not yet working!)
+    release : bool
+        a flag indicating whether to release video object
+    
+    Returns
+    ---------
+    pts : ndarray
+        4x2 array of box points
+    roi : ndarray
+        2D image cropped to pts
+    vid : opencv video object
+        video captured from video_src
+    frame_pos : float
+        number of frame corresponding to current position in video
+        
+    References:
+    getcoords.select_roi
+    """
+    # Prompt user to select a good frame we will work on later
+    print ("Press key `p` to select the ROI")
+    # Capture video
+    play_video = True
+    try:
+        while vid.isOpened():
+            # Read next frame
+            retval, frame = vid.read()
+            # Exit when video can't be read
+            if not retval: print ('Cannot read video file'); sys.exit();
+            
+            # Pause on 'p'
+            if(cv2.waitKey(1) == ord('p')):
+                #play_video = not play_video
+                break # Break from while loop
+            if show_frames:
+                # Show the current frame
+                cv2.namedWindow("SelectROI", cv2.WINDOW_NORMAL)
+                cv2.imshow("SelectROI", frame)
+    finally:
+        # Assure all windows closed
+        cv2.destroyAllWindows()
+        
+    # Get posiiton in videos in frames
+    frame_pos = vid.get(cv2.CAP_PROP_POS_FRAMES)
+    # Optionally release video object
+    if release: vid.release();
+        
+    return vid, frame_pos, frame
 
 def initialize_tracking(video_src, remove_bg, skip_init = False, save_vars = True):
     vid = cv2.VideoCapture(video_src)
@@ -555,7 +658,7 @@ def initialize_tracking(video_src, remove_bg, skip_init = False, save_vars = Tru
     if skip_init:
         (vid, frame) = getcoords.go_to_frame(vid, base_skip, video_src,
                             return_frame = True)
-        vid, frame_pos, frame = preprocess.find_frame_video(video_src)
+        vid, frame_pos, frame = find_frame_video(video_src)
         
         try:
             loaded_vars = np.load(fname)
@@ -579,7 +682,7 @@ def initialize_tracking(video_src, remove_bg, skip_init = False, save_vars = Tru
 def make_filename(full_path, ext_new = "", init_fname = None):
     """"Constructs filename from given path and extension
     """
-    (path, _) = os.path.splitext(full_path)
+    (path, ext) = os.path.splitext(full_path)
     (head, tail) = os.path.split(path)
     if ext_new: ext = ext_new;
     if init_fname:
@@ -617,15 +720,16 @@ def get_parameter_names(remove_bg, reinitialize_hsv, reinitialize_roi,
     names = []
     
     if remove_bg and load_bg:
-        names.append("background")
+        #names.append("background")
         names_init.append("background")
         
     if load_hsv:
-        names.append("roi_hist")
+        #names.append("roi_hist")
         names_init.append("roi_hist")
         
     if load_roi:
         names.append("pts")
+        names.append("frame_pos")
         
         
     return names, names_init
@@ -646,16 +750,17 @@ def get_in_out_names(video_src, init_flag, save_init):
     
     if init_flag and save_init:
         init_out = make_filename(video_src, "", "init")
-    elif init_flag:
-        init_in = None
     else:
         init_out = None
+    
+    if init_flag:
+        init_in = None
+    else:        
         init_in = make_filename(video_src, "", "init")
         
     fnames = [data_out, param_in, init_out, init_in]
     return fnames
-            
-    
+               
 def track_motion(   video_src, init_flag = False,
                     remove_bg = p.remove_bg, 
                     reinitialize_roi = p.reinitialize_roi,
@@ -663,43 +768,48 @@ def track_motion(   video_src, init_flag = False,
                     reinitialize_bg = p.reinitialize_bg,
                     save_init = p.save_init):
     
-    startdebug()
+    double_substract_bg = p.double_substract_bg
+    if double_substract_bg:
+        fgbg = cv2.createBackgroundSubtractorMOG2(  history = 50, varThreshold = 16,
+                                                    detectShadows = False)
+    
     (pnames, pnames_init) = get_parameter_names(remove_bg, reinitialize_hsv,                                            reinitialize_roi, reinitialize_bg)
     fnames = get_in_out_names(video_src, init_flag, save_init)
-    
     try:
         if pnames:
             p_vars_curr = load_tracking_params(fnames[1], p.ext, pnames)
-        if pnames_init and init_flag:
+        else:
+            p_vars_curr = {}
+        if pnames_init and not init_flag:
             p_vars_init = load_tracking_params(fnames[3], p.ext, pnames_init)
-        
-        p_vars = {**p_vars_curr, **p_vars_init}
-        
+        else: p_vars_init = {}
+            
+        p_vars = {**p_vars_curr, **p_vars_init}  
     except:
         print("Some parameters couldn't be loaded")
     
     if reinitialize_roi:
         pts, _, vid, frame_pos, frame = getcoords.select_roi_video(video_src)
         # Convert between different rectangle representations
-        pts = swap_coords_2d(pts)
     else:
         # pts, roi, vid, frame_pos, frame = from_preset(video_src)
         pts = p_vars["pts"]
         frame_pos = p_vars["frame_pos"]
         (vid, frame) = getcoords.go_to_frame([], frame_pos, video_src, return_frame = True)
     
-    
     if remove_bg and reinitialize_bg:
-        background, _ = segment_background(frame, pts, p.y_pad)
+        background, _ = segment_background(frame, swap_coords_2d(pts), p.y_pad)
     elif remove_bg and not reinitialize_bg:
         background = p_vars["background"]
         
+    if not reinitialize_roi: pts = swap_coords_2d(pts)    
+     
     if remove_bg:
         frame_bg_removed = subtract_background(frame, background)
-        roi = frame_bg_removed[pts[0][0]:pts[1][0], pts[0][1]:pts[2][1],:]
+        roi = frame_bg_removed[pts[0][0]:pts[1][0], pts[0][1]:pts[2][1],  :]
     else:
         background = np.empty(0);
-        roi = frame[pts[0][0]:pts[1][0], pts[0][1]:pts[2][1],:]
+        roi = frame[pts[0][0]:pts[1][0], pts[0][1]:pts[2][1],  :]
     
     if reinitialize_hsv:
         roi_hist = get_roi_hist(roi, vid, background, frame_pos,
@@ -711,18 +821,18 @@ def track_motion(   video_src, init_flag = False,
     # vid, roi_hist, pts, bbox, background, frame, sizes, ranges, chs, frame_pos = \
                 # initialize_tracking(video_src, remove_bg, skip_init = True, save_vars = True)
     # debug_plot2(frame, pts, [])
-    # startdebug()
-    
+
     save_flags = [reinitialize_roi, reinitialize_hsv, reinitialize_bg]
     if save_init and any(save_flags):
         names, names_init = get_parameter_names(remove_bg, not reinitialize_hsv,
                                     not reinitialize_roi, not reinitialize_bg)
         local_variables = locals()
-        save_dict = dict((n, local_variables[n]) for n in names)
-        save_tracking_params(fnames[0], save_dict, p.ext)
-        
-        save_dict_init = dict((n, local_variables[n]) for n in names_init)
-        save_tracking_params(fnames[2], save_dict_init, p.ext)
+        if names:
+            save_dict = dict((n, local_variables[n]) for n in names)
+            save_tracking_params(fnames[0], save_dict, p.ext)
+        if names_init:
+            save_dict_init = dict((n, local_variables[n]) for n in names_init)
+            save_tracking_params(fnames[2], save_dict_init, p.ext)
     
     # Setup the termination criteria, either 10 iteration or move by atleast 1 pt
     term_crit = ( cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, p.its, p.eps )
@@ -745,11 +855,14 @@ def track_motion(   video_src, init_flag = False,
 
         if remove_bg:
             frame_avg = subtract_background(frame_avg, background)
+        if double_substract_bg:
+            frame_avg, frame_binary = subtract_stationary_background(fgbg, frame_avg,
+                            frame_count, p.kSize_canny)
         
         params = dict(  kSize_gauss = p.kSize_gauss, sigmaX = p.sigmaX,
                         kSize_canny = p.kSize_canny, term_crit = term_crit)
                         
-        prob_mask, frame_binary = prob_mask_hsv(frame_avg, roi_hist, p.h_ranges,
+        prob_mask, _ = prob_mask_hsv(frame_avg, roi_hist, p.h_ranges,
                                                 p.chs, **params)
         
         res = tracker(  prob_mask, bbox, "meanShift", **params)
@@ -805,21 +918,19 @@ def track_motion(   video_src, init_flag = False,
     output_data(centroids, times, video_src)
     cv2.destroyAllWindows()
 
-def main():
+def main(video_src, init_flag):
     # Read video file path from user input
-    try: 
-        video_src = ap.parse_args().video
-        init_fname = ap.parse_args().init_fname
-    except: 
-        video_src = 0
-        init_flag = None
+    #p = importlib.import_module(parameter_set)
+    
     # Show documentation
     # print(__doc__)
-    # Assure that all windows get destroyed at the end of the run
+    # cwd = os.getcwd()
+    # (head, video_src) = os.path.split(fpath)
+    # os.chdir(head)
     try:
-        track_motion(video_src, init_fname)
+        track_motion(video_src, init_flag)
     finally:
         cv2.destroyAllWindows()
 
 if __name__ == '__main__':
-    main()
+    main(video_src, init_flag)

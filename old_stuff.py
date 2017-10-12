@@ -1,3 +1,4 @@
+import numpy as np
 #     s_size = hsv_upperb[1] - hsv_lowerb[1]
 #     v_size = hsv_upperb[2] - hsv_lowerb[2]
 #     s_range = np.arange(hsv_lowerb[1], hsv_upperb[1] + 1).tolist()
@@ -29,13 +30,14 @@ def debug_plot(im, bbox, mask,  roi, roi_mask):
     ax[1, 1].imshow(roi_mask, cmap = plt.cm.gray)
     plt.show()
 
-def debug_plot2(frame, pts, roi = None):
+def debug_plot2(frame, pts, roi = np.empty(0)):
     """Helper debugging plot
     """
     import matplotlib.pyplot as plt
-    if not roi:
+    if not roi.size:
         roi = frame[pts[0][0]:pts[1][0], pts[0][1]:pts[2][1],:]
     fig, (ax1, ax2) = plt.subplots(1,2, figsize = (12,8))
+    
     if type(pts) is tuple:
         pat = rect((pts[0], pts[1]), pts[2], pts[3], linewidth = 2,
                 edgecolor = 'r', facecolor = 'none')

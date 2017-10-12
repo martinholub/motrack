@@ -6,6 +6,9 @@ resources/*
 *.dat
 *.npy
 *.npz
+*.mp4
+*.m4v
+*.avi
 
 # Some general ignores
 .ipynb_checkpoints/
