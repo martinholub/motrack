@@ -7,7 +7,7 @@ eps = 1
 dist_lim = 20
 fraction = .25
 connectivity = 8
-min_area = 100
+min_area = 1
 
 sigmaX = 1 # std of Gaussian kernel
 kSize_gauss = (3, 3) # Gaussian kernel size
@@ -16,17 +16,16 @@ y_pad = 0 # optional padding of a roi
 
 reinitialize_roi = False
 reinitialize_hsv = False
-reinitialize_bg = False
+reinitialize_bg = True
 remove_bg = True
-double_substract_bg = True
+double_substract_bg = False
 ext = ".dat"
-save_init = any([reinitialize_roi, reinitialize_hsv, reinitialize_bg])
 chs = [1, 2]
 h_sizes = [256, 256]
 h_ranges = [0, 256, 0, 256]
-check_area = True
+check_area = False
 
 height_resize = 500
 annotate_mask = False and check_area
-plot_mask = True and check_area
+plot_mask = False
 show_frames = True

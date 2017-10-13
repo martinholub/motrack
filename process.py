@@ -20,8 +20,8 @@ for i, fname in enumerate(list(glob.glob(basepath + file_name))):
     completed = subprocess.run(call)    
     check_status = "returncode: {},".format(completed)
     timing = " time: {:.2f}s".format(time.time() - start_time)
+    
     print(fname)
     print(check_status + timing)
-    if i>0: break;
     
-   
+    if i>0: break;
