@@ -6,6 +6,7 @@ import pickle
 import getcoords
 from matplotlib.patches import Rectangle as rect
 import cv2
+import re
 
 def debug_plot2(frame, pts = None, roi = np.empty(0)):
     """Helper debugging plot
@@ -131,7 +132,7 @@ def load_tracking_params(base, ext, names = None, init_fname = None):
     return dict_out
 
 def get_parameter_names(remove_bg, reinitialize_hsv, reinitialize_roi,
-                        reinitialize_bg):
+                        reinitialize_bg, frame_range):
     """Prepares names of parameters to be loaded from two subsets.
     
     """
@@ -152,6 +153,7 @@ def get_parameter_names(remove_bg, reinitialize_hsv, reinitialize_roi,
         
     if load_roi:
         names.append("pts")
+        names_init.append("pts")
         names.append("frame_pos")
 
     return names, names_init
@@ -197,3 +199,17 @@ def draw_rectangle(frame, bbox):
     br = (int(bbox[0] + bbox[2]), int(bbox[1] + bbox[3])) #bottom-right
     cv2.rectangle(frame_vis, tl, br, (255,0,0), thickness = 3)
     return frame_vis
+    
+def convert_list_str(var_in):
+    if type(var_in) is np.ndarray:
+        var_in = var_in.tolist()
+    if type(var_in) is list:
+        var_out = str(var_in)
+        
+    if type(var_in) is str:
+        non_decimal = re.compile(r'[^\d]+')
+        list_in = var_in.split()
+        var_out = [int(non_decimal.sub("", x)) for x in list_in]
+        
+    return var_out
+        

@@ -151,7 +151,7 @@ def apply_pad(image, pad, mode = 'symmetric'):
     
     return image
         
-def select_roi_video(video_src, release = False, show_frames = True):
+def select_roi_video(video_src, release = False, show_frames = True, frame_pos = None):
     """Select a ROI from arbitrary video frame.
     
     Prompts the user to pause video and interactivelly select ROI.
@@ -184,6 +184,11 @@ def select_roi_video(video_src, release = False, show_frames = True):
         vid = cv2.VideoCapture(video_src)
     else:
         vid = video_src
+        
+    if frame_pos:
+        (vid, _) = go_to_frame(vid, frame_pos, None)
+        jump_flag = True
+        
     count = 0
     try:
         while vid.isOpened():
@@ -192,7 +197,7 @@ def select_roi_video(video_src, release = False, show_frames = True):
             # Exit when video can't be read
             if not retval: print ('Cannot read video file'); sys.exit();
             # Pause on 'p'
-            if(cv2.waitKey(10) == ord('p')):
+            if(cv2.waitKey(10) == ord('p')) or jump_flag:
                 #Define an initial bounding box
                 # bbox = (158, 26, 161, 163)
                 # Uncomment the line below to select a different bounding box
