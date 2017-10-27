@@ -8,6 +8,7 @@ dist_lim = 0
 fraction = .25
 connectivity = 8
 min_area = 1
+padding = 50
 
 sigmaX = 1 # std of Gaussian kernel
 kSize_gauss = (3, 3) # Gaussian kernel size
@@ -28,3 +29,4 @@ height_resize = 500
 annotate_mask = True
 plot_mask = True
 show_frames = True
+save_frames = False

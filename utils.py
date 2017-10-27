@@ -8,7 +8,7 @@ from matplotlib.patches import Rectangle as rect
 import cv2
 import re
 
-def debug_plot2(frame, pts = None, roi = np.empty(0)):
+def debug_plot2(frame, pts = None, roi = np.empty(0), cxy = (0, 0)):
     """Helper debugging plot
     
     Accepts either 4x2 as vertices or tuple of 4 as bbox params/
@@ -24,6 +24,8 @@ def debug_plot2(frame, pts = None, roi = np.empty(0)):
     
     if pts is not None:
         ax1.scatter(pts[:,0], pts[:,1], s = 100, c = "c",marker = "o")
+        
+        ax1.scatter(cxy[0], cxy[1], s = 100, c = "g", marker = "x")
         
     ax2.imshow(roi, cmap = "bone")    
     ax1.imshow(frame, cmap = "bone")
@@ -118,6 +120,9 @@ def load_tracking_params(base, ext, names = None, init_fname = None):
         : can determine if file binary in advance?
     """
     load_name = make_filename(base, ext, init_fname)
+    if not os.path.isfile(load_name):
+        return {}
+        
     if ext == ".dat":
         with open(load_name, "rb") as infile:
             loaded = pickle.load(infile)
@@ -150,6 +155,8 @@ def get_parameter_names(remove_bg, reinitialize_hsv, reinitialize_roi,
     if load_hsv:
         #names.append("roi_hist")
         names_init.append("roi_hist")
+        names_init.append("chs")
+        names_init.append("h_ranges")
         
     if load_roi:
         names.append("pts")
@@ -201,6 +208,10 @@ def draw_rectangle(frame, bbox):
     return frame_vis
     
 def convert_list_str(var_in):
+    """Converts between list/array and str and vice versa
+
+    Useful when passing command line arguments to subprocess.
+    """
     if type(var_in) is np.ndarray:
         var_in = var_in.tolist()
     if type(var_in) is list:
@@ -213,3 +224,14 @@ def convert_list_str(var_in):
         
     return var_out
         
+def define_video_output(video_src, vid, fps, step, out_height):
+    vid_name = make_filename("out_" + video_src, ".avi")
+    width = vid.get(cv2.CAP_PROP_FRAME_WIDTH)   # float
+    height = vid.get(cv2.CAP_PROP_FRAME_HEIGHT) # float
+    # Define the codec and create VideoWriter object
+    ratio = out_height / height
+    width = np.int(ratio * width)
+    fourcc = cv2.VideoWriter_fourcc('M', 'J', 'P', 'G')
+    vid_out = cv2.VideoWriter(vid_name,fourcc, fps / step, (width, out_height))
+    #vid_out = cv2.VideoWriter(vid_name,fourcc, 5, (675, 500))
+    return vid_out

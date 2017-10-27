@@ -20,7 +20,6 @@ import argparse
 import getcoords
 import sys
 import utils
-import pdb
 
 # Parse arguments
 ap = argparse.ArgumentParser()
@@ -62,7 +61,66 @@ def from_preset(video_src):
     roi = frame[pts[0][0]:pts[1][0], pts[0][1]:pts[2][1],:]
     
     return pts, roi, vid, frame_pos, frame
+
+def set_review_flags(dists, num_nonzeros, times):
+    """Flags file output for supervised control
     
+    Tracking may fail due to multiple reasons and often manifests itself by any of: 
+    1) detected object being stationary for too long period of time, 2) travelled 
+    distance between consecutive frames unepxectedly large or 3) changes in illumination
+    that persist over multiple consecutive frames.
+
+    Parameters
+    ----------
+    dists : list
+        traveled distances corresponding to all consecutive (constant) time deltas
+    num_nonzeros : int
+        number of oonzero pixels in binary representation of foreground and background
+        (fg = 1, bg = 0)
+    times : 
+        list of all times at which frames are collected
+
+    Returns
+    ----------
+    max_num_static : int
+        maximum number of frames over which dtetected object didn't move
+    max_num_large : int
+        maximum number of frames over which object area was unexpectedly large
+        (possibly due to persistent change of illumination)
+    max_dist : int
+        maximal distance travelled by object over all time-deltas
+
+    References
+    ------------
+    segment_stationary_background, label_contours
+    """
+    from itertools import groupby
+    
+    #1
+    gradients = np.around(np.gradient(dists)) # np.diff(dists)
+    group_reps = [[len(list(vals)), key] for (key, vals) in groupby(gradients)]
+    group_reps = np.asarray(group_reps)
+
+    max_num_static = np.max(group_reps[group_reps[:,1] == 0,0])
+    
+    #2        
+    thresh = 40000
+    num_nonzeros_thresh = [True if x > thresh else False for x in num_nonzeros]
+    group_reps = [[ len(list(vals)), key] for (key, vals) in 
+                    groupby(num_nonzeros_thresh)]
+    group_reps = np.asarray(group_reps)
+    if group_reps.size:
+        max_num_large = np.max(group_reps[group_reps[:, 1] == True,0])
+    else:
+        max_num_large = 0;
+    
+    #3
+    diffs = np.diff(dists)
+    diffs  = np.sort(diffs)
+    max_dist = np.abs(diffs[0])
+    
+    return max_num_static, max_num_large, max_dist
+  
 def output_data(centroids, times, num_nonzeros, video_src):
     """Writes select data into text file
     
@@ -92,34 +150,6 @@ def output_data(centroids, times, num_nonzeros, video_src):
     
     fname_out = utils.make_filename(video_src, ".txt")
     
-    def set_review_flags(dists, num_nonzeros, times, f):
-    
-        from itertools import groupby
-        
-        #1
-        gradients = np.around(np.gradient(dists)) # np.diff(dists)
-        group_reps = [[len(list(vals)), key] for (key, vals) in groupby(gradients)]
-        group_reps = np.asarray(group_reps)
-        # group_reps = sorted(group_reps, key = lambda x: x[1], reverse = True)
-        
-        max_num_static = np.max(group_reps[group_reps[:,1] == 0,0])
-        # flag_time = times[]
-        
-        #2        
-        thresh = 40000
-        num_nonzeros_thresh = [True if x > thresh else False for x in num_nonzeros]
-        #np.where(np.asarray(num_nonzeros) > thresh, True, False)
-        group_reps = [[len(list(vals)), key] for (key, vals) in groupby(num_nonzeros_thresh)]
-        group_reps = np.asarray(group_reps)
-        max_num_large = np.max(group_reps[group_reps[:, 1] == True,0])
-        
-        #3
-        diffs = np.diff(dists)
-        diffs  = np.sort(diffs)
-        max_dist = diff[0]
-        
-        return max_num_static, max_num_large, max_dist
-    
     with open(fname_out, "w") as f:
         f.write("No.,cX,cY,time,dist\n")
         for i, cent in enumerate(centroids):
@@ -148,6 +178,7 @@ def output_data(centroids, times, num_nonzeros, video_src):
             total_dist += dist if dist is not np.nan else 0
             dists[i] = dist
             
+            # Alternative to content of `if max_rep_count > 10:`
             # if np.around(dist) == np.around(dists[i-1]):
                 # rep_counter += 1
                 # if rep_counter > max_rep_count:
@@ -156,24 +187,24 @@ def output_data(centroids, times, num_nonzeros, video_src):
                 # # max_rep_count = np.max(rep_counter, max_rep_count)
             # else:
                 # rep_counter = 0
-        max_rep_count, max_large_count, max_dist = set_review_flags(dists, num_nonzeros, times)
+        
+        max_rep_count,max_large_count,max_dist=set_review_flags(dists,num_nonzeros,times)
         
         f.write("Total dist in mm: {:0.4f}\n".format(total_dist))
         f.write("Total time in sec: {:0.4f}\n".format(times[-1]))
         
-        # # set_review_flags(dists, num_nonzeros)
-        if max_rep_count > 5:
+        if max_rep_count > 10:
             #time_flag = times[ptr - max_rep_count]
             #f.write("WARNING: Motion too constant at {:0.4f}\n".format(time_flag))
-            f.write("WARNING:NoMotion: Object static for {:d}*`step` frames".format(max_rep_count))
+            f.write("WARNING:NoMotion: Object static for {:d}*`step` frames". \
+            format(np.int(max_rep_count)))
         if max_large_count > 10:
-            f.write("WARNING:Ilumination: Large object area for{:d}*`step` frames").\
-            format(max_large_count)
+            f.write("WARNING:Ilumination: Large object area for{:d}*`step` frames". \
+            format(np.int(max_large_count)))
         if max_dist > 150:
-            f.write("WARNING:Distance: Too large movement of {:d} pixels").\
-            format(max_dist)
-            
-            
+            f.write("WARNING:Distance: Too large movement of {:d} pixels". \
+            format(np.int(max_dist)))
+             
     # f.close() is implicit
 
 def average_frames(vid, frame_avg, step = 5, alpha = 0.5, frame_count = 0):
@@ -265,7 +296,7 @@ def find_frame_video(   video_src, show_frames = False, release = False):
     return vid, frame_pos, frame
      
 def get_roi_hist(   roi_rgb, vid, background = np.empty(0), frame_pos = [], 
-                    reinitialize = False):
+                    reinitialize = False, normalize = True):
     """Converts ROI to histogram
     
     Parameters
@@ -296,21 +327,32 @@ def get_roi_hist(   roi_rgb, vid, background = np.empty(0), frame_pos = [],
         video_source = vid
         vid = []
         
-    chs = p.chs
-    h_sizes = p.h_sizes
-    h_ranges = p.h_ranges
+    # chs = p.chs
+    # h_sizes = p.h_sizes
+    # h_ranges = p.h_ranges
     
     (hsv_lowerb, hsv_upperb) = select_hsv_range(vid, video_src, background,
                                                 frame_pos, reinitialize)
+    
+    chs = [0, 1, 2]
+    h_sizes = [180, 256, 256]
+    h_ranges = [(0, 179),  (0, 255), (0, 255)]
+    
+    diffs = hsv_upperb - hsv_lowerb + 1
+    update_tf = [x != y for x,y in zip(diffs, h_sizes )]
+    chs = [ch for tf,ch in zip(update_tf, chs) if tf == True]
+    h_sizes = [hs for tf,hs in zip(update_tf, h_sizes) if tf == True]
+    h_ranges = [x for tf,hr in zip(update_tf, h_ranges) if tf == True for x in hr]
     
     roi_hsv = cv2.cvtColor(roi_rgb, cv2.COLOR_BGR2HSV)
     mask = cv2.inRange(roi_hsv, hsv_lowerb , hsv_upperb)
     roi_hist = cv2.calcHist(images = [roi_hsv], channels = chs, mask = mask,
                             histSize = h_sizes, ranges = h_ranges)                       
-    # Normalize in-place between alpha and beta
-    cv2.normalize(  src = roi_hist, dst = roi_hist,  alpha = 0, beta = 255,
-                    norm_type = cv2.NORM_MINMAX)
-    return roi_hist
+
+    if normalize:
+        cv2.normalize(  src = roi_hist, dst = roi_hist,  alpha = 0, beta = 255,
+                        norm_type = cv2.NORM_MINMAX)
+    return roi_hist, h_ranges, chs
 
 def select_hsv_range(   vid, video_source, background = np.empty(0), 
                         frame_pos = [], reinitialize = False):
@@ -451,7 +493,7 @@ def segment_background(frame, bbox, **kwargs):
     
     return frame_inpaint, mask_fgd
 
-def subtract_background(frame, background, mask_fgd = np.empty(0)):
+def subtract_background(frame, background, mask_fgd = np.empty(0), normalize = True):
     """Subtract background level from ROI image
     
     Note: For this particular application, we substract frame from background
@@ -474,9 +516,10 @@ def subtract_background(frame, background, mask_fgd = np.empty(0)):
         frame_bg_removed = cv2.subtract(background, frame,  mask = mask)
     else:
         frame_bg_removed = cv2.subtract(background, frame)
-    
-    cv2.normalize(  src = frame_bg_removed, dst = frame_bg_removed,
-                alpha = 0, beta = 255, norm_type = cv2.NORM_MINMAX)
+        
+    if normalize:
+        cv2.normalize(  src = frame_bg_removed, dst = frame_bg_removed,
+                        alpha = 0, beta = 255, norm_type = cv2.NORM_MINMAX)
     
     return frame_bg_removed
        
@@ -537,12 +580,12 @@ def check_min_area( prob_mask, frame, min_area = p.min_area, type = 2,
     #prob_mask = cv2.bitwise_and(prob_mask, prob_mask, mask= frame_binary)
 
     num_nonzero = np.count_nonzero(frame_binary)
-    if (num_nonzero < min_area) & check_area: 
+    if (num_nonzero < min_area) and check_area: 
         prob_mask = None
     
     return prob_mask, frame_binary
                                               
-def label_contours(frame, type = 2 , **kwargs):
+def label_contours(frame, type = 2, dark = False, **kwargs):
     """Find binary image of object of interest
     
     Facilitate object tracking by first thresholding and creating
@@ -569,15 +612,14 @@ def label_contours(frame, type = 2 , **kwargs):
     # frame = cv2.GaussianBlur(frame, kSize_gauss, sigmaX)
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, kSize_canny)
     vis_img = np.zeros(frame.shape[:2], dtype = np.uint8)
-    
+    if frame.ndim > 2:
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.uint8)
 
     if type == 1:
         min_area = p.min_area
-        if frame.ndim > 2:
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.uint8)
+        
         edged = cv2.Canny(frame, threshold1 = 20, threshold2 = 255)
         edged = cv2.dilate(edged, kernel = kernel, iterations = 2)
-        
         cnts = cv2.findContours(edged.copy(), cv2.RETR_EXTERNAL,
                                 cv2.CHAIN_APPROX_SIMPLE)[1]
         cnts = sorted(  cnts, key = lambda x: cv2.arcLength(x, closed = True), 
@@ -592,9 +634,12 @@ def label_contours(frame, type = 2 , **kwargs):
     elif type == 2:
         fraction = p.fraction
         connectivity = p.connectivity
-        if frame.ndim > 2:
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.uint8)
-        binary = np.where(frame > np.max(frame) * fraction, 255, 0).astype(np.uint8)
+        if dark:
+            fraction = min(2*fraction, 1.0)
+            binary = np.where(frame < np.max(frame) * fraction, 255, 0).astype(np.uint8)
+        else:
+            binary = np.where(frame > np.max(frame) * fraction, 255, 0).astype(np.uint8)
+
         binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations =3)
         
         ccs = cv2.connectedComponentsWithStats(binary, connectivity, cv2.CV_32S)
@@ -608,11 +653,19 @@ def label_contours(frame, type = 2 , **kwargs):
         vis_img[labels == label] = 255
         # vis_image = cv2.bitwise_and(binary, binary, mask = mask)
         cnts = cv2.findContours(vis_img.copy(), cv2.RETR_EXTERNAL,
-                                cv2.CHAIN_APPROX_SIMPLE)[1]                                                     
+                                cv2.CHAIN_APPROX_SIMPLE)[1]
+        if frame.ndim > 2:
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.uint8)
+            
+    elif type == 3:
+        pass
     return (vis_img, cnts)
     
 def subtract_stationary_background(fgbg, frame_avg, frame_count, **kwargs):
     """Fit mixtore of gaussians as background model
+    References
+    -----------
+    [1]  https://docs.opencv.org/3.3.0/db/d5c/tutorial_py_bg_subtraction.html
     """
     kSize_canny = kwargs["kSize_canny"]
     kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, kSize_canny)
@@ -643,7 +696,10 @@ def subtract_stationary_background(fgbg, frame_avg, frame_count, **kwargs):
     
     if frame_count > 0:
         new_bg = fgbg.getBackgroundImage()
-        frame_avg = subtract_background(new_bg, frame_avg)
+        frame_avg = subtract_background(new_bg, frame_avg, normalize = True)
+    else:
+        cv2.normalize(  src = frame_avg, dst = frame_avg,
+                alpha = 0, beta = 255, norm_type = cv2.NORM_MINMAX)
         
         # frame_new = np.zeros_like(frame_avg, dtype = np.uint8)
         # frame_new[frame_fgd == 255, :] = frame_avg[frame_fgd == 255,: ]
@@ -701,6 +757,36 @@ def tracker(prob_mask, bbox, type = "meanShift", dist_lim = p.dist_lim, **kwargs
         pts = pts_old
     
     return (bbox, pts)
+
+def update_bbox_location(frame, bbox, **kwargs):
+    (c, r ,w, h) = bbox     
+    pad = kwargs["padding"]
+
+    c_p = c - pad; r_p = r - pad
+    w_p = w + 2*pad; h_p = h + 2*pad
+    roi = frame[r_p : r_p + h_p, c_p: c_p + w_p, :]
+    (vis_img, cnts) = label_contours(roi, type = 2, dark = True, **kwargs)
+    
+    # M = cv2.moments(cnts[0])
+    # cx = np.int(M['m10']/M['m00'] + c_p)
+    # cy = np.int(M['m01']/M['m00'] + r_p)
+    #c_new = np.int(c + (cx - (c + w*.5)))
+    #r_new = np.int(r + (cy - (r + h*.5)))
+    #bbox_new = (c_new, r_new, w, h)
+    #roi_new = frame[r_new:r_new+h, c_new: c_new+w, :]
+    
+    bbox_new = cv2.boundingRect(cnts[0])
+    (c_new, r_new, w_new, h_new) = bbox_new
+    c_new = c_new - pad + c_p; r_new = r_new - pad + r_p
+    w_new = w_new + 2*pad; h_new = h_new + 2*pad
+    bbox_new_pad = (c_new, r_new, w_new, h_new)
+
+    # roi_new = frame[r_new : r_new + h_new, c_new: c_new + w_new, :]
+    # cv2.drawContours(roi, cnts, contourIdx = -1, 
+                        # color = (255, 255, 255), thickness =  -1)
+    # utils.debug_plot2(frame, bbox_new_pad, roi_new)
+
+    return bbox_new, bbox_new_pad
    
 def track_motion(   video_src, init_flag = False,
                     remove_bg = p.remove_bg, 
@@ -711,18 +797,18 @@ def track_motion(   video_src, init_flag = False,
     double_substract_bg = p.double_substract_bg
     save_init = any([reinitialize_roi, reinitialize_hsv, reinitialize_bg])
     params = dict(  kSize_gauss = p.kSize_gauss, sigmaX = p.sigmaX,
-                    kSize_canny = p.kSize_canny)
+                    kSize_canny = p.kSize_canny, padding = p.padding)
     
     if double_substract_bg:
         fgbg = cv2.createBackgroundSubtractorMOG2(  history = 200, varThreshold = 12,
                                                     detectShadows = False)
         fgbg.setComplexityReductionThreshold(0.05*4)
         fgbg.setBackgroundRatio(1)
-    (pnames, pnames_init) = utils.get_parameter_names(remove_bg, reinitialize_hsv,                                            reinitialize_roi, reinitialize_bg,
-                                                frame_range)
+    (pnames, pnames_init) = utils.get_parameter_names(  remove_bg, reinitialize_hsv,                                                      reinitialize_roi, reinitialize_bg,
+                                                        frame_range)
     fnames = utils.get_in_out_names(video_src, init_flag, save_init)
     
-    try:
+    try: 
         if pnames:
             p_vars_curr = utils.load_tracking_params(fnames[1], p.ext, pnames)
         else:
@@ -730,22 +816,24 @@ def track_motion(   video_src, init_flag = False,
         if pnames_init and not init_flag:
             p_vars_init = utils.load_tracking_params(fnames[3], p.ext, pnames_init)
         else: p_vars_init = {}
-            
-        p_vars = {**p_vars_curr, **p_vars_init}  
+           
+        p_vars = {**p_vars_curr, **p_vars_init}
+        
     except:
         print("Some parameters couldn't be loaded")
     
     if reinitialize_roi and not frame_range:
         pts, _, vid, frame_pos, frame = getcoords.select_roi_video(video_src)
+        pts = utils.swap_coords_2d(pts)
     
     elif reinitialize_roi and frame_range:
         pts, _, vid, frame_pos, frame = getcoords.select_roi_video(video_src,
                                             frame_pos = frame_range[0])
-                                            
+        pts = utils.swap_coords_2d(pts)                                    
     elif not reinitialize_roi and frame_range:
         frame_pos = frame_range[0]
         (vid, frame) = getcoords.go_to_frame([], frame_pos, video_src, return_frame = True)
-        pts = p_vars["pts"]
+        pts = p_vars["pts"]      
     elif not frame_range:
         # pts, roi, vid, frame_pos, frame = from_preset(video_src)
         pts = p_vars["pts"]
@@ -754,9 +842,13 @@ def track_motion(   video_src, init_flag = False,
     
     bbox = cv2.boundingRect(pts)
     (c, r ,w, h) = bbox
-    
+    # np.savez(video_src, frame, bbox)
+    # import pdb; pdb.set_trace()
+    bbox_min, bbox = update_bbox_location(frame, bbox, **params)
+    (c, r ,w, h) = bbox
+
     if remove_bg and reinitialize_bg:
-        background, mask_fgd = segment_background(frame, bbox, **params)
+        background, mask_fgd = segment_background(frame, bbox_min, **params)
     elif remove_bg and not reinitialize_bg:
         background = p_vars["background"]
      
@@ -768,17 +860,18 @@ def track_motion(   video_src, init_flag = False,
         roi = frame[r:r+h, c: c+w, :]
     
     if reinitialize_hsv:
-        roi_hist = get_roi_hist(roi, vid, background, frame_pos,
+        roi_hist, h_ranges, chs = get_roi_hist(roi, vid, background, frame_pos,
                                 reinitialize_hsv)
     else:
         roi_hist = p_vars["roi_hist"]
-                                              
+        h_ranges = p_vars["h_ranges"]
+        chs = p_vars["chs"]
+                                                
     # vid, roi_hist, pts, bbox, background, frame, sizes, ranges, chs, frame_pos = \
                 # initialize_tracking(video_src, remove_bg, skip_init = True, save_vars = True)
-
+    
     if save_init:
-        names, names_init = utils.get_parameter_names(remove_bg, not reinitialize_hsv,
-                                    not reinitialize_roi, not reinitialize_bg)
+        names, names_init = utils.get_parameter_names(remove_bg, not reinitialize_hsv, not reinitialize_roi, not reinitialize_bg, frame_range)
         local_variables = locals()
         if names:
             save_dict = dict((n, local_variables[n]) for n in names)
@@ -799,6 +892,11 @@ def track_motion(   video_src, init_flag = False,
     num_nonzeros = []
     stop_frame = frame_range[1] - frame_range[0]
     
+    #############
+    if p.save_frames:
+        vid_out = utils.define_video_output(video_src, vid, fps, p.step, p.height_resize)
+    #############
+    
     while vid.isOpened() and frame_count <= stop_frame:
                    
         frame_avg = np.zeros_like(frame, dtype = np.float32)
@@ -809,12 +907,18 @@ def track_motion(   video_src, init_flag = False,
 
         if remove_bg:
             frame_avg = subtract_background(frame_avg, background)
+            
         if double_substract_bg:
-            frame_avg, frame_binary, cnts = subtract_stationary_background(fgbg, frame_avg,
-                            frame_count, **params)
+            frame_avg, frame_binary, cnts = subtract_stationary_background(fgbg,                                frame_avg, frame_count, **params)
+        else:
+            cnts = []
+            frame_binary = np.empty(0)
+            # cv2.normalize(  src = frame_avg, dst = frame_avg,
+                            # alpha = 0, beta = 255, norm_type = cv2.NORM_MINMAX)
                   
-        prob_mask= prob_mask_hsv(frame_avg, roi_hist, p.h_ranges,
-                                                p.chs, **params)
+        prob_mask= prob_mask_hsv(frame_avg, roi_hist, h_ranges,
+                                                chs, **params)
+        
         
         res = tracker(  prob_mask, bbox, "meanShift", **params)
         
@@ -833,19 +937,23 @@ def track_motion(   video_src, init_flag = False,
         centroids.append(cent)
         time = float(frame_count)/fps
         times.append(time) #Save time
-        num_nonzero = np.count_nonzero(frame_binary)
-        num_nonzeros.append(num_nonzero)
-        
+        if frame_binary.size:
+            num_nonzero = np.count_nonzero(frame_binary)
+            num_nonzeros.append(num_nonzero)
+
+        if frame_count < 10:
+            cv2.waitKey(np.int(1/fps * p.step * 1000 * 10))# requires pause for rendering
         # Visualize
         if p.show_frames:
             # frame_vis = prob_mask.copy() # frame_avg.copy()
             frame_vis = cv2.cvtColor(frame_avg, cv2.COLOR_BGR2GRAY).astype(np.uint8)
             
+            # utils.debug_plot2(frame_avg, pts = None, roi = frame_vis)
             (r, b, w) = ((0, 0, 255), (0, 0, 0), (255, 255, 255))
             # Put timestamp on the average image
             time_str = "{:.2f}".format(time)
             dimy, dimx = frame_vis.shape[:2]
-            time_loc = (int(dimx-250), dimy-150)
+            time_loc = (int(dimx-250), dimy)
             cv2.putText(frame_vis, time_str, time_loc, cv2.FONT_HERSHEY_PLAIN, 5, w)
             prob_str = "Max prob: {:.2f}%".format(np.max(prob_mask) / 2.55)
             prob_loc = (50, 50)
@@ -857,9 +965,16 @@ def track_motion(   video_src, init_flag = False,
             # Image should be uint8 to be drawable in 0, 255 scale
             # https://stackoverflow.com/questions/9588719/opencv-double-mat-shows-up-as-all-white
             (frame_vis, _) = getcoords.resize_frame(frame_vis, height = p.height_resize)
+            
             cv2.imshow("Tracking", frame_vis)
+            
+            if frame_count > 0 and p.save_frames:
+                new_shape = frame_vis.shape + (1, )
+                frame_vis = np.reshape(frame_vis, new_shape)
+                frame_vis = np.repeat(frame_vis,3,  axis = 2)
+                vid_out.write(frame_vis)
 
-        if p.annotate_mask and p.plot_mask and cnts:
+        if p.annotate_mask and p.plot_mask and (cnts):
 
             w = (255, 255, 255)
             cnt_metric = cv2.arcLength(cnts[0], True)
@@ -868,15 +983,14 @@ def track_motion(   video_src, init_flag = False,
             ann_loc = (50, 50)
             cv2.putText(frame_binary, ann_str, ann_loc, cv2.FONT_HERSHEY_PLAIN, 3, w)
             
-        if p.plot_mask: 
+        if p.plot_mask and frame_binary.size: 
             (frame_binary, _) = getcoords.resize_frame(frame_binary, height = p.height_resize)
             cv2.imshow("Mask", frame_binary)
                     
             # Interrupt on ESC
             ch = 0xFF & cv2.waitKey(1)
             if ch == 27: break;
-            elif ch == ord('d'): startdebug()
-            
+            elif ch == ord('d'): import pdb; pdb.set_trace()
     # end while True:
     output_data(centroids, times, num_nonzeros, video_src)
     cv2.destroyAllWindows()
@@ -885,6 +999,7 @@ def main(video_src, init_flag):
     # Read video file path from user input    
     # Show documentation
     # print(__doc__)
+    
     # cwd = os.getcwd()
     # (head, video_src) = os.path.split(fpath)
     # os.chdir(head)
