@@ -36,6 +36,9 @@ try:
     frame_range = utils.convert_list_str(args.frame_range) 
 except: 
     print("Cannot read cmd arguments.")
+    parameter_set = "params"
+    frame_range = []
+    video_src = []
 
 init_flag = True if parameter_set == "params_init" else False
 
@@ -44,26 +47,9 @@ if init_flag:
 else: 
     import params as p
     
-def from_preset(video_src):
-    """Use pre-set values to speed up processing.
-    
-    References
-    -------------
-    getcoords.select_roi_video
-    """
-    frame_pos = 650.0
-    pts = np.array([[ 520, 1259], #[tl, tr, br, bl]
-                    [ 626, 1259],
-                    [ 626, 1434],
-                    [ 520, 1434]], dtype = np.int32)
-    (vid, frame) = getcoords.go_to_frame([], frame_pos, video_src,
-                                return_frame = True)
-    roi = frame[pts[0][0]:pts[1][0], pts[0][1]:pts[2][1],:]
-    
-    return pts, roi, vid, frame_pos, frame
 
 def set_review_flags(dists, num_nonzeros, times):
-    """Flags file output for supervised control
+    """Sets flags for supervised control
     
     Tracking may fail due to multiple reasons and often manifests itself by any of: 
     1) detected object being stationary for too long period of time, 2) travelled 
@@ -97,7 +83,7 @@ def set_review_flags(dists, num_nonzeros, times):
     from itertools import groupby
     
     #1
-    gradients = np.around(np.gradient(dists)) # np.diff(dists)
+    gradients = np.around(np.gradient(dists)) # alternative: np.diff(dists)
     group_reps = [[len(list(vals)), key] for (key, vals) in groupby(gradients)]
     group_reps = np.asarray(group_reps)
 
@@ -120,6 +106,79 @@ def set_review_flags(dists, num_nonzeros, times):
     max_dist = np.abs(diffs[0])
     
     return max_num_static, max_num_large, max_dist
+    
+def flag_file_review(f, dists, num_nonzeros, times):
+    """Marks file for manual control by appending warnings to output
+    
+    Parameters
+    ----------
+    f : file handle
+        handle to file to write warnings into
+    dists : list
+        traveled distances corresponding to all consecutive (constant) time deltas
+    num_nonzeros : int
+        number of oonzero pixels in binary representation of foreground and background
+        (fg = 1, bg = 0)
+    times : 
+        list of all times at which frames are collected
+    
+    Returns
+    ------------
+    f : file handle
+        handle to file with flags appended
+        
+    References
+    ---------------
+    set_review_flags
+    """
+
+    max_rep_count, max_large_count, max_dist = \
+                            set_review_flags(dists, num_nonzeros, times)
+
+    if max_rep_count > 10:
+        f.write("WARNING:NoMotion: Object static for {:d}*`step` frames\n". \
+        format(np.int(max_rep_count)))
+    if max_large_count > 10:
+        f.write("WARNING:Ilumination: Large object area for {:d}*`step` frames\n". \
+        format(np.int(max_large_count)))
+    if max_dist > 150:
+        f.write("WARNING:Distance: Too large movement of {:d} pixels\n". \
+        format(np.int(max_dist)))
+        
+    return f
+    
+def compute_distance(centroids, cent, i, M, scale):
+    """Compute distance between two centroids
+    
+    Uses precomputed transformations parameters.
+    
+    Parameters
+    -----------
+    i : int
+        iterator, function is called in loop
+    M : ndarray
+        3x3 projective transformation matrix
+    scale : float
+        scaling factor in units mm / pixel
+        
+    References
+    -------
+    getcoords.projective_transform, getcoords.find_scale
+    """
+    cent_warped = np.dot(cent, M)
+    cX = cent_warped[0]
+    cY = cent_warped[1]
+    cZ = cent_warped[2]          
+    if i > 0 :
+        cent_prev_warped = np.dot(centroids[i-1], M)
+        dx = (cX - cent_prev_warped[0])
+        dy = (cY - cent_prev_warped[1])
+        dz = (cZ - cent_prev_warped[2])
+        dist = np.sqrt(dx**2 + dy**2) * scale
+    else: # We dont have information on previous location
+        dist = 0;
+    
+    return dist, cX, cY, cZ
   
 def output_data(centroids, times, num_nonzeros, video_src):
     """Writes select data into text file
@@ -136,8 +195,7 @@ def output_data(centroids, times, num_nonzeros, video_src):
         
     References
     -----------
-    getcoords.find_scale, getcoords.projective_transform
-           
+    getcoords.find_scale, getcoords.projective_transform  
     """
     # Initalize variables that hold sums
     total_dist = 0
@@ -145,10 +203,10 @@ def output_data(centroids, times, num_nonzeros, video_src):
     rep_counter = 0
     max_rep_count = 0
     
-    scale = np.load("scaling_factor.npy")
-    M = np.load("projection_matrix.npy")
+    scale = np.load("src\\scaling_factor.npy")
+    M = np.load("src\\projection_matrix.npy")
     
-    fname_out = utils.make_filename(video_src, ".txt")
+    fname_out = utils.make_filename(video_src, ".txt", parent = "res")
     
     with open(fname_out, "w") as f:
         f.write("No.,cX,cY,time,dist\n")
@@ -159,19 +217,8 @@ def output_data(centroids, times, num_nonzeros, video_src):
                 dist = np.nan
                 continue;
             
-            cent_warped = np.dot(cent, M)
-            cX = cent_warped[0]
-            cY = cent_warped[1]
-            cZ = cent_warped[2]
-            time = times[i]            
-            if i > 0 :
-                cent_prev_warped = np.dot(centroids[i-1], M)
-                dx = (cX - cent_prev_warped[0])
-                dy = (cY - cent_prev_warped[1])
-                dz = (cZ - cent_prev_warped[2])
-                dist = np.sqrt(dx**2 + dy**2) * scale
-            else: # We dont have information on previous location
-                dist = 0;   
+            time = times[i]                       
+            dist, cX, cY, cZ = compute_distance(centroids, cent, i, M, scale)
                 
             f.write("{:d},{:0.2f},{:0.2f},{:0.2f},{:0.2f}\n".format(i, cX, cY,
                                                                     time, dist))
@@ -188,22 +235,13 @@ def output_data(centroids, times, num_nonzeros, video_src):
             # else:
                 # rep_counter = 0
         
-        max_rep_count,max_large_count,max_dist=set_review_flags(dists,num_nonzeros,times)
-        
         f.write("Total dist in mm: {:0.4f}\n".format(total_dist))
         f.write("Total time in sec: {:0.4f}\n".format(times[-1]))
         
-        if max_rep_count > 10:
-            #time_flag = times[ptr - max_rep_count]
-            #f.write("WARNING: Motion too constant at {:0.4f}\n".format(time_flag))
-            f.write("WARNING:NoMotion: Object static for {:d}*`step` frames". \
-            format(np.int(max_rep_count)))
-        if max_large_count > 10:
-            f.write("WARNING:Ilumination: Large object area for{:d}*`step` frames". \
-            format(np.int(max_large_count)))
-        if max_dist > 150:
-            f.write("WARNING:Distance: Too large movement of {:d} pixels". \
-            format(np.int(max_dist)))
+        #time_flag = times[ptr - max_rep_count]
+        #f.write("WARNING: Motion too constant at {:0.4f}\n".format(time_flag))
+        
+        f = flag_file_review(f, dists, num_nonzeros, times)
              
     # f.close() is implicit
 
@@ -247,7 +285,7 @@ def find_frame_video(   video_src, show_frames = False, release = False):
     Parameters
     ----------
     video_src : str
-        path to video (GOPRO videos not yet working!)
+        path to video, must be in compatible format (avi is OK)
     release : bool
         a flag indicating whether to release video object
     
@@ -443,8 +481,8 @@ def select_hsv_range(   vid, video_source, background = np.empty(0),
             hsv_lowerb = np.array([0, 0, 100])
             hsv_upperb = np.array([179,200,255])
         else:
-            hsv_lowerb = np.array([0, 50, 0]) # without bg substraction
-            hsv_upperb = np.array([179, 160, 100]) # without bg substraction
+            hsv_lowerb = np.array([0, 0, 150]) # without bg substraction
+            hsv_upperb = np.array([179, 50, 255]) # without bg substraction
         
     return (hsv_lowerb, hsv_upperb)
 
@@ -777,6 +815,8 @@ def update_bbox_location(frame, bbox, **kwargs):
     
     bbox_new = cv2.boundingRect(cnts[0])
     (c_new, r_new, w_new, h_new) = bbox_new
+    bbox_new = (c_new + c_p, r_new + r_p, w_new, h_new) # newly added
+       
     c_new = c_new - pad + c_p; r_new = r_new - pad + r_p
     w_new = w_new + 2*pad; h_new = h_new + 2*pad
     bbox_new_pad = (c_new, r_new, w_new, h_new)
@@ -784,7 +824,7 @@ def update_bbox_location(frame, bbox, **kwargs):
     # roi_new = frame[r_new : r_new + h_new, c_new: c_new + w_new, :]
     # cv2.drawContours(roi, cnts, contourIdx = -1, 
                         # color = (255, 255, 255), thickness =  -1)
-    # utils.debug_plot2(frame, bbox_new_pad, roi_new)
+    # utils.debug_plot(frame, bbox_new, roi_new)
 
     return bbox_new, bbox_new_pad
    
@@ -804,10 +844,9 @@ def track_motion(   video_src, init_flag = False,
                                                     detectShadows = False)
         fgbg.setComplexityReductionThreshold(0.05*4)
         fgbg.setBackgroundRatio(1)
-    (pnames, pnames_init) = utils.get_parameter_names(  remove_bg, reinitialize_hsv,                                                      reinitialize_roi, reinitialize_bg,
-                                                        frame_range)
+    (pnames, pnames_init) = utils.get_parameter_names(  remove_bg, reinitialize_hsv,                                                      reinitialize_roi, reinitialize_bg)
     fnames = utils.get_in_out_names(video_src, init_flag, save_init)
-    
+    import pdb; pdb.set_trace()
     try: 
         if pnames:
             p_vars_curr = utils.load_tracking_params(fnames[1], p.ext, pnames)
@@ -871,14 +910,14 @@ def track_motion(   video_src, init_flag = False,
                 # initialize_tracking(video_src, remove_bg, skip_init = True, save_vars = True)
     
     if save_init:
-        names, names_init = utils.get_parameter_names(remove_bg, not reinitialize_hsv, not reinitialize_roi, not reinitialize_bg, frame_range)
+        names, names_init = utils.get_parameter_names(remove_bg, not reinitialize_hsv, not reinitialize_roi, not reinitialize_bg)
         local_variables = locals()
         if names:
             save_dict = dict((n, local_variables[n]) for n in names)
-            utils.save_tracking_params(fnames[0], save_dict, p.ext)
+            _ = utils.save_tracking_params(fnames[0], save_dict, p.ext)
         if names_init and init_flag:
             save_dict_init = dict((n, local_variables[n]) for n in names_init)
-            utils.save_tracking_params(fnames[2], save_dict_init, p.ext)
+            _ = utils.save_tracking_params(fnames[2], save_dict_init, p.ext)
     
     # Setup the termination criteria, either 10 iteration or move by atleast 1 pt
     term_crit = ( cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, p.its, p.eps )
@@ -993,6 +1032,8 @@ def track_motion(   video_src, init_flag = False,
             elif ch == ord('d'): import pdb; pdb.set_trace()
     # end while True:
     output_data(centroids, times, num_nonzeros, video_src)
+    if p.save_frames:
+        vid_out.release()
     cv2.destroyAllWindows()
 
 def main(video_src, init_flag):

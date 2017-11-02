@@ -20,9 +20,6 @@ reinitialize_bg = True
 remove_bg = True
 double_substract_bg = True
 ext = ".dat"
-chs = [1, 2]
-h_sizes = [256, 256]
-h_ranges = [0, 256, 0, 256]
 check_area = False
 
 height_resize = 500

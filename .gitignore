@@ -2,6 +2,7 @@
 videos/*
 resources/*.png
 resources/*
+tests/res/*.avi
 *.txt
 *.dat
 *.npy
