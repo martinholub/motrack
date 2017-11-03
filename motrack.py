@@ -192,10 +192,13 @@ def output_data(centroids, times, num_nonzeros, video_src):
         list of centroids of tracked object sampled at times
     times : list
         List of sampling times. Sampling every step-th frame.
+    num_nonzeros : list
+        List of total number of nonzero pixel values in binary foreground mask 
+        for each time step
         
     References
     -----------
-    getcoords.find_scale, getcoords.projective_transform  
+    getcoords.find_scale, getcoords.projective_transform, set_review_flags
     """
     # Initalize variables that hold sums
     total_dist = 0
@@ -224,25 +227,11 @@ def output_data(centroids, times, num_nonzeros, video_src):
                                                                     time, dist))
             total_dist += dist if dist is not np.nan else 0
             dists[i] = dist
-            
-            # Alternative to content of `if max_rep_count > 10:`
-            # if np.around(dist) == np.around(dists[i-1]):
-                # rep_counter += 1
-                # if rep_counter > max_rep_count:
-                    # ptr = i
-                    # max_rep_count = rep_counter
-                # # max_rep_count = np.max(rep_counter, max_rep_count)
-            # else:
-                # rep_counter = 0
         
         f.write("Total dist in mm: {:0.4f}\n".format(total_dist))
         f.write("Total time in sec: {:0.4f}\n".format(times[-1]))
         
-        #time_flag = times[ptr - max_rep_count]
-        #f.write("WARNING: Motion too constant at {:0.4f}\n".format(time_flag))
-        
-        f = flag_file_review(f, dists, num_nonzeros, times)
-             
+        f = flag_file_review(f, dists, num_nonzeros, times)     
     # f.close() is implicit
 
 def average_frames(vid, frame_avg, step = 5, alpha = 0.5, frame_count = 0):
@@ -270,7 +259,7 @@ def average_frames(vid, frame_avg, step = 5, alpha = 0.5, frame_count = 0):
     
     for i in range(step):
         ret, frame = vid.read()
-        if frame is None: break; # if stack empty, break
+        if frame is None: break;
         frame = frame.astype(np.uint8)
         # Accumulate running average with alpha weighting
         cv2.accumulateWeighted(src = frame, dst = frame_avg, alpha = alpha)
@@ -300,13 +289,13 @@ def find_frame_video(   video_src, show_frames = False, release = False):
     frame_pos : float
         number of frame corresponding to current position in video
         
-    References:
+    References
+    ----------------
     getcoords.select_roi
     """
     # Prompt user to select a good frame we will work on later
     print ("Press key `p` to select the ROI")
     # Capture video
-    play_video = True
     try:
         while vid.isOpened():
             # Read next frame
@@ -316,7 +305,6 @@ def find_frame_video(   video_src, show_frames = False, release = False):
             
             # Pause on 'p'
             if(cv2.waitKey(1) == ord('p')):
-                #play_video = not play_video
                 break # Break from while loop
             if show_frames:
                 # Show the current frame
@@ -357,17 +345,14 @@ def get_roi_hist(   roi_rgb, vid, background = np.empty(0), frame_pos = [],
     chs : list
         chnannels to compute histogram on, corresponds to n
     
-    References:
+    References
+    -----------------
     ..[1] http://docs.opencv.org/3.3.0/dd/d0d/tutorial_py_2d_histogram.html
     """
     video_src = []
     if type(vid) is str:
         video_source = vid
         vid = []
-        
-    # chs = p.chs
-    # h_sizes = p.h_sizes
-    # h_ranges = p.h_ranges
     
     (hsv_lowerb, hsv_upperb) = select_hsv_range(vid, video_src, background,
                                                 frame_pos, reinitialize)
@@ -481,8 +466,8 @@ def select_hsv_range(   vid, video_source, background = np.empty(0),
             hsv_lowerb = np.array([0, 0, 100])
             hsv_upperb = np.array([179,200,255])
         else:
-            hsv_lowerb = np.array([0, 0, 150]) # without bg substraction
-            hsv_upperb = np.array([179, 50, 255]) # without bg substraction
+            hsv_lowerb = np.array([0, 0, 150]) # with bg substraction
+            hsv_upperb = np.array([179, 50, 255]) # with bg substraction
         
     return (hsv_lowerb, hsv_upperb)
 
@@ -511,7 +496,7 @@ def segment_background(frame, bbox, **kwargs):
     mask = np.zeros(frame.shape[:2], np.uint8)
     (c, r ,w, h) = bbox
     mask[r:r+h, c: c+w] = 1
-        
+      
     frame_corrupt = frame.copy()
     frame_corrupt[mask == True] = 0
     frame_inpaint = cv2.inpaint(frame_corrupt, mask, inpaintRadius = 5,
@@ -528,7 +513,7 @@ def segment_background(frame, bbox, **kwargs):
     
     # 1 = obvious FGD, 3 = Possible FGD
     mask_fgd = np.where((mask_segment==1) | (mask_segment==3),1,0).astype('uint8')
-    
+        
     return frame_inpaint, mask_fgd
 
 def subtract_background(frame, background, mask_fgd = np.empty(0), normalize = True):
@@ -541,11 +526,19 @@ def subtract_background(frame, background, mask_fgd = np.empty(0), normalize = T
     frame : np.ndarray
     background : np.ndarray
     mask_fgd : np.ndarray
-        2D, binary. [default = np.empty()]
+        2D, binary. [default = np.empty(0)]
+    normalize : bool
+        flag indicating whether to normalize pixel values between 0 and 255 
+        [default = True]
     
     Returns
     -------------
     frame_bg_removed : np.ndarray
+        frame with background subtracted
+        
+    References
+    -----------
+    ..[1] https://pythonprogramming.net/grabcut-foreground-extraction-python-opencv-tutorial/
     """
     if frame.dtype.type is not np.uint8:
         frame = frame.astype(np.uint8)
@@ -700,37 +693,49 @@ def label_contours(frame, type = 2, dark = False, **kwargs):
     return (vis_img, cnts)
     
 def subtract_stationary_background(fgbg, frame_avg, frame_count, **kwargs):
-    """Fit mixtore of gaussians as background model
+    """Fit mixture of gaussians as background model
+    
+    Parameters
+    ------------
+    fgbg : cv2 MOG2 background subtractor object
+        used settings are {history=200, varThreshold=12, detectShadows=False,
+        complexityReductionThreshold = 0.2, backgroundRation = 1}
+    frame_avg : ndarray
+        3channel RGB image of the whole frame, optinoally averaged over several
+        frames
+    frame_count : int
+        Number of current frame, multiple of `step`
+    **kwargs : dict
+        other arguments passed as key,value pairs
+        
+    Returns
+    -----------
+    frame_avg : ndarray
+        average frame with background subtracted
+    frame_fgd : ndarray
+        binary mask indicating foreground pixels
+    cnts : list
+        List of points describing contours found in the image
+    
     References
     -----------
-    [1]  https://docs.opencv.org/3.3.0/db/d5c/tutorial_py_bg_subtraction.html
+    ..[1] https://docs.opencv.org/3.3.0/db/d5c/tutorial_py_bg_subtraction.html
     """
     kSize_canny = kwargs["kSize_canny"]
     kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, kSize_canny)
     learn_rate = max(0.04, 1/fgbg.getHistory())
     frame_fgd = fgbg.apply(frame_avg, learningRate = learn_rate)
-    bg_ratio  = fgbg.getBackgroundRatio()
-    crt = fgbg.getComplexityReductionThreshold()
+    #bg_ratio  = fgbg.getBackgroundRatio()
+    #crt = fgbg.getComplexityReductionThreshold()
     cnts = []
     
-    # print("bg_ratio: {}, crt: {}".format(bg_ratio, crt))
-    # fgbg.setComplexityReductionThreshold()
-    
-    if fgbg.getDetectShadows():
+    if fgbg.getDetectShadows(): #ignore shadows detection
         frame_fgd = np.where(frame_fgd > 0, 255, 0).astype(np.uint8)
     
-    # frame_fgd = cv2.morphologyEx(    frame_fgd, cv2.MORPH_CLOSE,
-    #                                        kernel, iterations = 3)
     frame_fgd = cv2.dilate(frame_fgd, kernel = kernel, iterations = 1)
     frame_fgd = cv2.erode(frame_fgd, kernel = kernel, iterations = 2)
     frame_fgd = cv2.dilate(frame_fgd, kernel = kernel, iterations = 5)
     (frame_fgd, cnts) = label_contours(frame_fgd, type = 1, **kwargs)
-    
-    # frame_bgd = np.where(frame_fgd > 0, 0, 1).astype(np.float32)
-
-    # new_shape = frame_bgd.shape + (1, )
-    # frame_bgd = np.reshape(frame_bgd, new_shape)
-    # bg2 = (frame_avg * np.tile(frame_bgd, frame_avg.shape[2])).astype(np.uint8)
     
     if frame_count > 0:
         new_bg = fgbg.getBackgroundImage()
@@ -738,25 +743,21 @@ def subtract_stationary_background(fgbg, frame_avg, frame_count, **kwargs):
     else:
         cv2.normalize(  src = frame_avg, dst = frame_avg,
                 alpha = 0, beta = 255, norm_type = cv2.NORM_MINMAX)
-        
-        # frame_new = np.zeros_like(frame_avg, dtype = np.uint8)
-        # frame_new[frame_fgd == 255, :] = frame_avg[frame_fgd == 255,: ]
-        
-        # cv2.normalize(  src = new_bg, dst = new_bg,
-                # alpha = 0, beta = 255, norm_type = cv2.NORM_MINMAX)
-        #(_, _) = label_contours(frame_new, type = 1, **kwargs)
-        # utils.debug_plot2(frame_avg, pts = None, roi = frame_fgd)
-        # pdb.set_trace()
-    
-    # frame_avg = frame_avg - np.prod(frame_avg,frame_fgd, axis=2)
-    # frame_avg = bitwise_and(frame_avg, frame_avg)
+                
     return frame_avg , frame_fgd, cnts
     
 def tracker(prob_mask, bbox, type = "meanShift", dist_lim = p.dist_lim, **kwargs):
     """Tracks an object in image
     
-    The function is to be extended at will to achieve reliable tracking of given
-    object.
+    `meanShift` type keeps constant size of bbox, whereas `camShift` adjusts it.
+    The former is more reliable.
+    
+    Usage notes:
+        - Make bbox significantly bigger than your object (~5x)
+        - The bbox should be larger in direction of anticipated movement
+        - Reliability may be increased purely by adding cv2.waitKey(n) for couple
+          of initial frames processed. This may have something to do with speed of
+          PC the algorith runs on.
     
     Parameters
     ---------------
@@ -766,11 +767,21 @@ def tracker(prob_mask, bbox, type = "meanShift", dist_lim = p.dist_lim, **kwargs
         2D probability mask
     bbox : tuple
         Bounding box (minY, minX, deltaY, deltaX)
+    dist_lim : int
+        optional minimal distance that the bbox is required to move between 
+        time-steps in order for its position to be updated [default = 0]
     
     Returns
     -----------
-    bbox : ndarray
+    bbox : tuple
+        updated bbox as tuple of 4 -> (x, y, dx, dy), where x horizontal,
+        y vertical with origin at top-left
     pts : ndarray
+        equivalent bbox but described by 4 vertices 
+    
+    References
+    -----------
+    .. [1] http://opencv-python-tutroals.readthedocs.io/en/latest/py_tutorials/py_video/py_meanshift/py_meanshift.html
     """
     if prob_mask is None:
         return None
@@ -797,6 +808,32 @@ def tracker(prob_mask, bbox, type = "meanShift", dist_lim = p.dist_lim, **kwargs
     return (bbox, pts)
 
 def update_bbox_location(frame, bbox, **kwargs):
+    """Update boundig box location
+    
+    Fits bounding box to found contours within previous bbox. This is done to enable
+    general starting location while allowing for small deviations of initial 
+    posiiton of the tracked object.
+    
+    Parameters
+    -----------
+    frame : ndarray
+        current frame, can be 1 or 3 channels
+    bbox : tuple
+        current bounding box
+    **kwargs : dict
+        other arguments passed as key,value pairs
+        
+    Returns
+    ------------
+    bbox_new : tuple
+        adjusted bbox (used for BG subtraction)
+    bbox_new_pad : tuple
+        adjusted bbox additionally paded to yet increase robustness (used for tracking)
+    
+    References
+    -----------
+    segment_background, tracker
+    """
     (c, r ,w, h) = bbox     
     pad = kwargs["padding"]
 
@@ -804,15 +841,7 @@ def update_bbox_location(frame, bbox, **kwargs):
     w_p = w + 2*pad; h_p = h + 2*pad
     roi = frame[r_p : r_p + h_p, c_p: c_p + w_p, :]
     (vis_img, cnts) = label_contours(roi, type = 2, dark = True, **kwargs)
-    
-    # M = cv2.moments(cnts[0])
-    # cx = np.int(M['m10']/M['m00'] + c_p)
-    # cy = np.int(M['m01']/M['m00'] + r_p)
-    #c_new = np.int(c + (cx - (c + w*.5)))
-    #r_new = np.int(r + (cy - (r + h*.5)))
-    #bbox_new = (c_new, r_new, w, h)
-    #roi_new = frame[r_new:r_new+h, c_new: c_new+w, :]
-    
+        
     bbox_new = cv2.boundingRect(cnts[0])
     (c_new, r_new, w_new, h_new) = bbox_new
     bbox_new = (c_new + c_p, r_new + r_p, w_new, h_new) # newly added
@@ -821,11 +850,6 @@ def update_bbox_location(frame, bbox, **kwargs):
     w_new = w_new + 2*pad; h_new = h_new + 2*pad
     bbox_new_pad = (c_new, r_new, w_new, h_new)
 
-    # roi_new = frame[r_new : r_new + h_new, c_new: c_new + w_new, :]
-    # cv2.drawContours(roi, cnts, contourIdx = -1, 
-                        # color = (255, 255, 255), thickness =  -1)
-    # utils.debug_plot(frame, bbox_new, roi_new)
-
     return bbox_new, bbox_new_pad
    
 def track_motion(   video_src, init_flag = False,
@@ -833,6 +857,61 @@ def track_motion(   video_src, init_flag = False,
                     reinitialize_roi = p.reinitialize_roi,
                     reinitialize_hsv = p.reinitialize_hsv,
                     reinitialize_bg = p.reinitialize_bg):
+                    
+    """Track object in a video
+    
+    Implements background subtraction with GrabCut and MOG2 algorithms. Tracking is 
+    based on either CamShift or meanShift algorithms.
+    
+    Parameters
+    ---------------
+    video_src : str
+        relative path to video to be processed (in suitable format, e.g. .avi or .mkv,
+        depends on PC and OS the algorith runs on)
+    reinitialize_roi : bool
+        [True for init, else False]
+    reinitialize_hsv : bool
+        [True for init, else False]
+    reinitialize_bg : bool
+        [True]
+    init_flag : bool
+        is this an initializing run? [True for init, else False]
+    remove_bg : bool
+        [default = True]
+          
+    Additional Parameters 
+    (see available cmd line arguments and files params.py and params_init.py)
+    -------------
+    frame_range : list
+        range of rames to process, read from csv file
+    double_subtract_bg : bool
+        use also MOG2? [default = True]
+    params : str
+        which parameter set to use
+    height_resize : int
+        height of image to plot, will be resized if different from current
+    plot_mask : bool
+        Flag indicating if binary fg mask should be plotted as well [default = True]
+    annotate_mask : bool
+        Add additional text information to plot_mask image? [default = True]
+    show_frames : bool
+        Plot frames from video and visualize tracking [default = True]
+    save_frames : bool
+        Flag indicating whether to save frames shown in `Tracking` window (cf. 
+        show_frames), see utils.define_video_output
+        
+    Returns
+    -----------
+    None
+    
+    References
+    ----------------
+    ..[1] https://docs.opencv.org/3.0-beta/doc/py_tutorials/py_video/py_bg_subtraction/py_bg_subtraction.html
+    
+    See also
+    -----------
+    process.py, params.py, params_init.py, utils.define_video_output
+    """
     
     double_substract_bg = p.double_substract_bg
     save_init = any([reinitialize_roi, reinitialize_hsv, reinitialize_bg])
@@ -846,7 +925,7 @@ def track_motion(   video_src, init_flag = False,
         fgbg.setBackgroundRatio(1)
     (pnames, pnames_init) = utils.get_parameter_names(  remove_bg, reinitialize_hsv,                                                      reinitialize_roi, reinitialize_bg)
     fnames = utils.get_in_out_names(video_src, init_flag, save_init)
-    import pdb; pdb.set_trace()
+
     try: 
         if pnames:
             p_vars_curr = utils.load_tracking_params(fnames[1], p.ext, pnames)
@@ -881,8 +960,6 @@ def track_motion(   video_src, init_flag = False,
     
     bbox = cv2.boundingRect(pts)
     (c, r ,w, h) = bbox
-    # np.savez(video_src, frame, bbox)
-    # import pdb; pdb.set_trace()
     bbox_min, bbox = update_bbox_location(frame, bbox, **params)
     (c, r ,w, h) = bbox
 
@@ -906,8 +983,6 @@ def track_motion(   video_src, init_flag = False,
         h_ranges = p_vars["h_ranges"]
         chs = p_vars["chs"]
                                                 
-    # vid, roi_hist, pts, bbox, background, frame, sizes, ranges, chs, frame_pos = \
-                # initialize_tracking(video_src, remove_bg, skip_init = True, save_vars = True)
     
     if save_init:
         names, names_init = utils.get_parameter_names(remove_bg, not reinitialize_hsv, not reinitialize_roi, not reinitialize_bg)
@@ -931,10 +1006,8 @@ def track_motion(   video_src, init_flag = False,
     num_nonzeros = []
     stop_frame = frame_range[1] - frame_range[0]
     
-    #############
     if p.save_frames:
         vid_out = utils.define_video_output(video_src, vid, fps, p.step, p.height_resize)
-    #############
     
     while vid.isOpened() and frame_count <= stop_frame:
                    
@@ -980,14 +1053,15 @@ def track_motion(   video_src, init_flag = False,
             num_nonzero = np.count_nonzero(frame_binary)
             num_nonzeros.append(num_nonzero)
 
-        if frame_count < 10:
-            cv2.waitKey(np.int(1/fps * p.step * 1000 * 10))# requires pause for rendering
+        if frame_count < 10: # requires pause for rendering, may be machine dependent -.-
+            cv2.waitKey(np.int(1/fps * p.step * 1000 * 10))
+        else: # requires pause for rendering, may be machine dependent -.-
+            cv2.waitKey(np.int(1/fps * p.step * 1000 * 0.1))
         # Visualize
         if p.show_frames:
             # frame_vis = prob_mask.copy() # frame_avg.copy()
             frame_vis = cv2.cvtColor(frame_avg, cv2.COLOR_BGR2GRAY).astype(np.uint8)
             
-            # utils.debug_plot2(frame_avg, pts = None, roi = frame_vis)
             (r, b, w) = ((0, 0, 255), (0, 0, 0), (255, 255, 255))
             # Put timestamp on the average image
             time_str = "{:.2f}".format(time)

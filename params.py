@@ -24,6 +24,6 @@ check_area = False
 
 height_resize = 500
 annotate_mask = True
-plot_mask = True
+plot_mask = False
 show_frames = True
 save_frames = False

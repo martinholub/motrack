@@ -40,5 +40,4 @@ for i, fname in enumerate(list(glob.glob(basepath + file_name))):
     
     print(fname)
     print(check_status + timing)
-
-    if i > 0: break
+    if i > 0 :break
