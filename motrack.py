@@ -20,6 +20,7 @@ import argparse
 import getcoords
 import sys
 import utils
+import os
 
 # Parse arguments
 ap = argparse.ArgumentParser()
@@ -28,14 +29,16 @@ ap.add_argument("-fr", "--frame_range", type = str, help ="[sart_frame, stop_fra
                 default = [])
 ap.add_argument("-p", "--params", type = str, help= "parameter set", 
                 default = "params")
-
 try:
     args = ap.parse_args()
     video_src = args.video
     parameter_set = args.params
     frame_range = utils.convert_list_str(args.frame_range) 
-except: 
-    print("Cannot read cmd arguments.")
+except Exception as ex: 
+    template = "An exception of type {0} occurred. Arguments:\n{1!r}"
+    message = template.format(type(ex).__name__, ex.args)
+    print(message)
+    
     parameter_set = "params"
     frame_range = []
     video_src = []
@@ -210,6 +213,11 @@ def output_data(centroids, times, num_nonzeros, video_src):
     M = np.load("src\\projection_matrix.npy")
     
     fname_out = utils.make_filename(video_src, ".txt", parent = "res")
+    
+    try:
+        os.mkdir("res")
+    except FileExistsError:
+        pass
     
     with open(fname_out, "w") as f:
         f.write("No.,cX,cY,time,dist\n")
@@ -415,7 +423,7 @@ def select_hsv_range(   vid, video_source, background = np.empty(0),
         if background.size: #if exists
             frame = subtract_background(frame, background)
                     
-        frame, _ = getcoords.resize_frame(frame, height = p.height_resize)
+        frame, _ = utils.resize_frame(frame, height = p.height_resize)
                 
         hh='Hue High'
         hl='Hue Low'
@@ -1054,7 +1062,7 @@ def track_motion(   video_src, init_flag = False,
             num_nonzeros.append(num_nonzero)
 
         if frame_count < 10: # requires pause for rendering, may be machine dependent -.-
-            cv2.waitKey(np.int(1/fps * p.step * 1000 * 10))
+            cv2.waitKey(np.int(1/fps * p.step * 1000 * 20))
         else: # requires pause for rendering, may be machine dependent -.-
             cv2.waitKey(np.int(1/fps * p.step * 1000 * 0.1))
         # Visualize
@@ -1077,7 +1085,7 @@ def track_motion(   video_src, init_flag = False,
             
             # Image should be uint8 to be drawable in 0, 255 scale
             # https://stackoverflow.com/questions/9588719/opencv-double-mat-shows-up-as-all-white
-            (frame_vis, _) = getcoords.resize_frame(frame_vis, height = p.height_resize)
+            (frame_vis, _) = utils.resize_frame(frame_vis, height = p.height_resize)
             
             cv2.imshow("Tracking", frame_vis)
             
@@ -1097,7 +1105,7 @@ def track_motion(   video_src, init_flag = False,
             cv2.putText(frame_binary, ann_str, ann_loc, cv2.FONT_HERSHEY_PLAIN, 3, w)
             
         if p.plot_mask and frame_binary.size: 
-            (frame_binary, _) = getcoords.resize_frame(frame_binary, height = p.height_resize)
+            (frame_binary, _) = utils.resize_frame(frame_binary, height = p.height_resize)
             cv2.imshow("Mask", frame_binary)
                     
             # Interrupt on ESC

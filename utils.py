@@ -7,6 +7,8 @@ import getcoords
 from matplotlib.patches import Rectangle as rect
 import cv2
 import re
+import imutils
+from scipy.spatial import distance as dist
 
 def debug_plot(frame, pts = None, roi = np.empty(0), cxy = (0, 0)):
     """Helper debugging plot
@@ -76,6 +78,46 @@ def rectangle_to_centroid(pts):
     cZ = 0.0
     
     return np.asarray([cX, cY, cZ], dtype = np.float32)
+
+def order_points(pts, ratio = 1):
+    '''Order points of bounding box in clockwise order.
+    
+    Parameters
+    -----------
+    pts: 4x2 array of four point pairs
+    ratio: scaling ratio
+    
+    Returns
+    -----------
+    array_like
+        points in [top_left, top_right, bottom_right, bottom+left] order
+    '''
+    # sort the points based on their x-coordinates
+    xSorted = pts[np.argsort(pts[:, 0]), :]
+    
+    # grab the left-most and right-most points from the sorted
+    # x-roodinate points
+    leftMost = xSorted[:2, :]
+    rightMost = xSorted[2:, :]
+    
+    # Sort the left-most coordinates according to their
+    # y-coordinates so we can grab the top-left and bottom-left
+    # points, respectively
+    leftMost = leftMost[np.argsort(leftMost[:, 1]), :]
+    (tl, bl) = leftMost
+
+    # now that we have the top-left coordinate, use it as an
+    # anchor to calculate the Euclidean distance between the
+    # top-left and right-most points; by the Pythagorean
+    # theorem, the point with the largest distance will be
+    # our bottom-right point
+    D = dist.cdist(tl[np.newaxis], rightMost, "euclidean")[0]
+    (br, tr) = rightMost[np.argsort(D)[::-1], :]
+    
+    # return the coordinates in top-left, top-right,
+    # bottom-right, and bottom-left order
+    pts_out = np.array([tl, tr, br, bl], dtype="int32") * ratio
+    return pts_out
     
 def swap_coords_2d(pts):
     """Swaps x and y coordinates in n-by-2 array
@@ -119,6 +161,26 @@ def bbox_to_pts(bbox):
                     [ bbox[0], bbox[1]+ bbox[3]]], dtype = np.int32) 
     #pts = getcoords.order_points(pts)
     return pts
+
+def resize_frame(image, height = 860):
+    '''Resize image frame.
+    
+    Parameters
+    ------------
+    image: ndaray
+    height : int
+        Height of output frame to be rescaled to
+    
+    Returns
+    -----------
+    image : ndarray
+        resized image
+    ratio : int
+        scaling ratio
+    '''
+    ratio = image.shape[0] / height
+    image = imutils.resize(image, height = height)
+    return image, ratio
     
 def adjust_filename(fname, ext_out):
     """Replaces extension in filename.
@@ -198,6 +260,11 @@ def save_tracking_params(video_src, save_dict, ext, init_fname = None):
     init_fname : str
         Name of file that stores paramaters relevant for all processed files 
     """
+    try:
+        os.mkdir("inits")
+    except FileExistsError:
+        pass
+        
     save_name = make_filename(video_src, ext, init_fname, parent = "inits")
     if os.path.isfile(save_name):
         saved_params = load_tracking_params(video_src, ext)
@@ -400,3 +467,141 @@ def define_video_output(video_src, vid, fps, step, out_height):
     vid_out = cv2.VideoWriter(vid_name,fourcc, fps / step, (width, out_height))
     #vid_out = cv2.VideoWriter(vid_name,fourcc, 5, (675, 500))
     return vid_out
+
+def max_width_height(box):
+    """Computes maximal width and height of rotated and possibly skewed
+    bounding box
+    
+    Parameters
+    -------------
+    pts : ndarray
+        4x2 array of box points
+        
+    maxDims : tuple
+        tuple of (maxWidth, maxHeight)
+    """
+    # Unpack the points
+    (tl, tr, br, bl) = box.astype(dtype = np.float32)
+    
+    # compute the width of the new image, which will be the
+    # maximum distance between bottom-right and bottom-left
+    # x-coordiates or the top-right and top-left x-coordinates
+    widthA = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
+    widthB = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
+    maxWidth = max(int(widthA), int(widthB))
+
+    # compute the height of the new image, which will be the
+    # maximum distance between the top-right and bottom-right
+    # y-coordinates or the top-left and bottom-left y-coordinates
+    heightA = np.sqrt(((tr[0] - br[0]) ** 2) + ((tr[1] - br[1]) ** 2))
+    heightB = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
+    maxHeight = max(int(heightA), int(heightB))
+    return (maxWidth, maxHeight)
+
+def apply_pad(image, pad, mode = 'symmetric'):
+    """ Apply padding to an image
+    
+    Parameters
+    ----------
+    pad : tuple
+        (y_pad, x_pad)
+    mode : str
+        mode of padding, "symmetric" by default
+        
+    Returns
+    -------------
+    image : ndarray
+        Image with padding
+        
+    References
+    --------------
+    [1]  https://docs.scipy.org/doc/numpy-1.13.0/reference/generated/numpy.pad.html
+    """
+    (y_pad, x_pad) = pad
+    if len(image.shape) >= 2:
+        pad_vector = [(y_pad, y_pad), (x_pad, x_pad)]
+    elif len(image.shape) == 3:
+        pad_vector.append((0, 0))
+    image = np.pad(image, pad_vector, mode = mode)
+    
+    return image
+    
+def confirm_overwrite(fnames_list):
+    """Confirm overwriting of files
+    
+    check if files exist and if they do, propmt user for overwiriting confirmation
+    
+    Parameters
+    --------------
+    fnames_list: list
+        filenames to check for overwriting
+    
+    Returns
+    --------------
+    do_overwrite : bool
+        boolean indicating whether to overwrite the exisitng files
+    """
+    is_file_list = []
+    for n in fnames_list:
+        is_file_list.append(os.path.isfile(n))
+        
+    if any(is_file_list):
+        response = input("Overwrite exsiting files: [y/n]")
+    
+        if response == "y":
+            do_overwrite = True
+        elif response == "n":
+            do_overwrite = False
+        else:
+            print("Unknown input, defaulting to `n`.")
+            do_overwrite = False
+    else:
+        do_overwrite = True
+    
+    return do_overwrite
+
+def debug_points(image, ellip, circ, pts1, pts2, pad = 0):
+    """Helper function to debug transformations
+    
+    Plots mapping of ellipse-circle point-pair coordinates
+    
+    """
+    import matplotlib.patches as mpatches
+    import matplotlib.lines as mlines
+    
+    pad = 0
+    imageVis = image.copy()
+    (c,r) = circ
+    
+    majAx = ellip[1][1]
+    minAx = ellip[1][0]
+    angle_rad = (90 - ellip[2]) * (2*np.pi / 360)
+    # Get directional shifts
+    xshift = np.sin(angle_rad) * (majAx / 2)
+    yshift = -np.sin(angle_rad) * (minAx / 2)
+    
+    fig, ax = plt.subplots(1,1, figsize = (12, 12))
+    #Add circle, centre, ellipse over the image
+    circle = plt.Circle((c[0], c[1]+pad), radius = r,
+                        fill = False, color = "r", linewidth = 2)
+    ellipse = mpatches.Ellipse((ellip[0][0], ellip[0][1] + pad),
+                                np.int(minAx), np.int(majAx), angle = ellip[2],
+                                fill = False, color = "b", linewidth = 4)
+    ax.add_artist(circle)
+    ax.add_artist(ellipse)
+    
+    ax.scatter( pts1[:, 0], pts1[:,1] + pad, s = 100, c = "c",
+                marker = "o", label = "Circle Pts")                       
+    ax.scatter( pts2[:, 0], pts2[:,1] + pad, s = 100, c = "m",
+                marker = "x", label = "Ellipse Pts")
+    
+    linestyles = ['--', ':']
+    for (ls, pts) in (zip(linestyles, [pts1, pts2])):
+        majAx_line = mlines.Line2D(pts[0:2, 0], pts[0:2,1]+pad, linestyle = ls)
+        minAx_line = mlines.Line2D(pts[2:4, 0], pts[2:4,1]+pad, linestyle = ls)
+        ax.add_line(majAx_line)
+        ax.add_line(minAx_line)
+    imageVis_pad = np.pad(imageVis, ((pad, pad), (0, 0)), mode = 'symmetric')
+    ax.imshow(imageVis_pad, cmap = "gray", alpha = 1)
+    plt.show()
+    

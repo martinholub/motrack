@@ -1,96 +1,30 @@
+#!/usr/bin/env python
 # Import packages
-from scipy.spatial import distance as dist
+import matplotlib.pyplot as plt
 import numpy as np
 import cv2
-import matplotlib.pyplot as plt
-import imutils
 import sys
-import pdb
+import argparse
+import utils
 
-def startdebug():
-    # Fire up debugger
-    pdb.set_trace()
-
-def resize_frame(image, height = 860):
-    '''Resize image frame.
+# Unnecessary when file imported within other functions but produces exception
+# ap = argparse.ArgumentParser()
+# ap.add_argument("-nr", "--new_roi", type = bool, help= "update initial roi",
+                # default = 0)
+# ap.add_argument("-s", "--save", type = bool, help= "save transformation parameters",
+                # default = 0)
+# try:
+    # args = ap.parse_args()
+    # update_roi = args.new_roi
+    # do_save = args.save
+# except Exception as ex: 
+    # template = "An exception of type {0} occurred. Arguments:\n{1!r}"
+    # message = template.format(type(ex).__name__, ex.args)
+    # print(message)
     
-    Parameters
-    ------------
-    image: ndaray
-    
-    Returns
-    -----------
-    array_like: resized image
-    ration: scaling ratio
-    '''
-    ratio = image.shape[0] / height
-    image = imutils.resize(image, height = height)
-    return image, ratio
-
-def order_points(pts, ratio = 1):
-    '''Order points of bounding box in clockwise order.
-    
-    Parameters
-    -----------
-    pts: 4x2 array of four point pairs
-    ratio: scaling ratio
-    
-    Returns
-    -----------
-    array_like
-        points in [top_left, top_right, bottom_right, bottom+left] order
-    '''
-    # sort the points based on their x-coordinates
-    xSorted = pts[np.argsort(pts[:, 0]), :]
-    
-    # grab the left-most and right-most points from the sorted
-    # x-roodinate points
-    leftMost = xSorted[:2, :]
-    rightMost = xSorted[2:, :]
-    
-    # Sort the left-most coordinates according to their
-    # y-coordinates so we can grab the top-left and bottom-left
-    # points, respectively
-    leftMost = leftMost[np.argsort(leftMost[:, 1]), :]
-    (tl, bl) = leftMost
-
-    # now that we have the top-left coordinate, use it as an
-    # anchor to calculate the Euclidean distance between the
-    # top-left and right-most points; by the Pythagorean
-    # theorem, the point with the largest distance will be
-    # our bottom-right point
-    D = dist.cdist(tl[np.newaxis], rightMost, "euclidean")[0]
-    (br, tr) = rightMost[np.argsort(D)[::-1], :]
-    
-    # return the coordinates in top-left, top-right,
-    # bottom-right, and bottom-left order
-    pts_out = np.array([tl, tr, br, bl], dtype="int32") * ratio
-    return pts_out
+update_roi = False
+do_save = False
    
-def fit_undistort(frame, mtx, dist, refit = False):
-    '''
-    Eventually this function will apply undistortion for our specific camera.
-    Currently it doesn't do any good.
-    
-    References:http://opencv-python-tutroals.readthedocs.io/en/latest/py_tutorials/py_calib3d/py_calibration/py_calibration.html#undistortion
-    '''   
-    if refit:
-        # you may want to refit the intrinsic matrix
-        h, w = frame.shape[:2]
-        mtx_new, roi_crop = cv2.getOptimalNewCameraMatrix(
-                    mtx, dist, imageSize = (w,h), alpha = 1, newImgSize = (w,h))
-        # undistort using the new found matrix
-        dst = cv2.undistort(frame, mtx, dist, dst = None, newCameraMatrix = mtx_new)
-        # Crop empty pixels
-        x,y,w,h = roi_crop
-        dst = dst[y:y+h, x:x+w]
-        
-    else:
-        # Just apply undistortion with unchanged params
-        dst = cv2.undistort(frame, mtx, dist)
-        
-    return dst
-
 def select_roi(img, win_name, undistort = False):
     '''Select ROI from image.
     
@@ -115,8 +49,7 @@ def select_roi(img, win_name, undistort = False):
     print("SelectROI (Enter=confirm, Esc=exit)")
     # Prompt for ROI to be analyzed
     try:
-        if undistort: # currently it doesn't help at all
-            pass
+        # if undistort: # currently it doesn't help at all
             # img = fit_undistort(img, intrinsic_matrix, distortion_coeffs)
         
         (c, r, w, h) = cv2.selectROI(   win_name, img, fromCenter = False,
@@ -128,27 +61,10 @@ def select_roi(img, win_name, undistort = False):
         cv2.destroyAllWindows()
     # Store bounding box corners    
     pts = [[r, c], [r, c+w], [r+h, c], [r+h, c+w]]
-    pts = order_points(np.asarray(pts))
+    pts = utils.order_points(np.asarray(pts))
     # Pull out roi
     roi = img[r:r+h, c: c+w]
     return pts, roi
-
-def apply_pad(image, pad, mode = 'symmetric'):
-    """ Apply padding to an image
-    
-    Parameters
-    ----------
-    pad : tuple
-        (y_pad, x_pad)
-    """
-    (y_pad, x_pad) = pad
-    if len(image.shape) >= 2:
-        pad_vector = [(y_pad, y_pad), (x_pad, x_pad)]
-    elif len(image.shape) == 3:
-        pad_vector.append((0, 0))
-    image = np.pad(image, pad_vector, mode = mode)
-    
-    return image
         
 def select_roi_video(video_src, frame_pos = None, release = False, show_frames = True):
     """Select a ROI from arbitrary video frame.
@@ -158,9 +74,14 @@ def select_roi_video(video_src, frame_pos = None, release = False, show_frames =
     Parameters
     ----------
     video_src : str
-        path to video (GOPRO videos not yet working!)
+        path to video (must by of supported type which depends on installed codecs).
+        Can be also already opened cv2 video object.
+    frame_pos : int
+        Position of a frame in video to jump to.
+    show_frames: bool
+        flag indicating whether to show video frames during frame search.
     release : bool
-        a flag indicating whether to release video object
+        a flag indicating whether to release video object after roi selection
     
     Returns
     ---------
@@ -172,6 +93,8 @@ def select_roi_video(video_src, frame_pos = None, release = False, show_frames =
         video captured from video_src
     frame_pos : float
         number of frame corresponding to current position in video
+    frame : ndarray
+        current frame
         
     References:
     getcoords.select_roi
@@ -188,6 +111,8 @@ def select_roi_video(video_src, frame_pos = None, release = False, show_frames =
     if frame_pos:
         (vid, _) = go_to_frame(vid, frame_pos, None)
         jump_flag = True
+    else:
+        jump_flag = False
     
     count = 0
     try:
@@ -278,7 +203,7 @@ def find_contours(roi, contour_number = 1):
     """
     # convert to grayscale, and blur
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-    gray = apply_pad(gray, (300, 50), "symmetric")
+    gray = utils.apply_pad(gray, (300, 50), "symmetric")
     gray_sharp = gray.copy()
     # Sigma and ksize are scale dependent!!! 
     gray = cv2.GaussianBlur(gray, ksize = (3, 3), sigmaX = 0)
@@ -294,7 +219,8 @@ def find_contours(roi, contour_number = 1):
     cnts = sorted(cnts, key = cv2.contourArea, reverse = True)[:10] 
 
     max_cnt = cnts[contour_number]
-    # Keep only clean part of circle. Try to automate later.
+    # Keep only clean part of circle
+    # to automate it would need robust ellipse fitting e.g. with RANSAC
     # if you dont pad, use 170:-170
     max_cnt = max_cnt[400:-400]
     
@@ -346,7 +272,7 @@ def mask_box_ellip(image, ellip):
     
     Returns
     ------------
-    box : array_like
+    pts : array_like
         corners of the minimal-area rectangle in 
         [top_left, top_right, bottom_right, bottom_left] order
     mask : 2D array
@@ -362,40 +288,18 @@ def mask_box_ellip(image, ellip):
                                 cv2.CHAIN_APPROX_SIMPLE)[1][0]
     
     rect = cv2.minAreaRect(contour)
-    box = cv2.boxPoints(rect)
-    box = np.int64(box)
+    pts = cv2.boxPoints(rect)
+    pts = np.int64(pts)
     # obtain a consistent order of the points
-    box = order_points(box)
+    pts = utils.order_points(pts)
     
-    cv2.polylines(  img = imageVis, pts = [box], isClosed = True,
+    cv2.polylines(  img = imageVis, pts = [pts], isClosed = True,
                     color = (255, 255, 255), thickness = 7)
     cv2.ellipse(imageVis, ellip, color = (255, 255, 255), thickness = 7)
     
-    return box, mask, imageVis
+    return pts, mask, imageVis
     
-def max_width_height(box):
-    """Computes maximal width and height of rotated and possibly skewed
-    bounding box
-    """
-    # Unpack the points
-    (tl, tr, br, bl) = box.astype(dtype = np.float32)
-    
-    # compute the width of the new image, which will be the
-    # maximum distance between bottom-right and bottom-left
-    # x-coordiates or the top-right and top-left x-coordinates
-    widthA = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
-    widthB = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
-    maxWidth = max(int(widthA), int(widthB))
-
-    # compute the height of the new image, which will be the
-    # maximum distance between the top-right and bottom-right
-    # y-coordinates or the top-left and bottom-left y-coordinates
-    heightA = np.sqrt(((tr[0] - br[0]) ** 2) + ((tr[1] - br[1]) ** 2))
-    heightB = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
-    maxHeight = max(int(heightA), int(heightB))
-    return (maxWidth, maxHeight)
-
-def four_point_transform(image, box, mask):
+def four_point_transform(image, pts, mask):
     """Obtain bird's eye view of an image.
     
     Obtains bird's eye view of an image by first projective-transforming it to
@@ -406,22 +310,28 @@ def four_point_transform(image, box, mask):
     ---------
     image : 2D array
         grayscale image of region of interest
-    box : array_like
+    pts : array_like
         corners of the minimal-area rectangle in 
         [top_left, top_right, bottom_right, bottom_left] order
     mask : 2D array
         boolean mask of the full ellipse contour
     
     Returns
-    ---------
+    -----------
     warped : 2D array
         projective and affine transformed image
-    
+    warped_mask : 2D ndarray
+        projective and affine transformed boolean mask
+    warped_temp : 2D ndarray
+        intermediate, projective only transformed image
+    warped_mask_temp : 2D ndarray
+        intermediate, projective only transformed boolean mask
+        
     References
     ------------
-   http://www.pyimagesearch.com/2014/08/25/4-point-opencv-getperspective-transform-example/
+    [1]  http://www.pyimagesearch.com/2014/08/25/4-point-opencv-getperspective-transform-example/
     """
-    (maxWidth, maxHeight) = max_width_height(box)
+    (maxWidth, maxHeight) = utils.max_width_height(pts)
 
     # now that we have the dimensions of the new image, construct
     # the set of destination points to obtain a "birds eye view",
@@ -435,11 +345,10 @@ def four_point_transform(image, box, mask):
 
     # rows = maxHeight
     # cols = maxWidth
-    # Get shape of initial image
     rows, cols = mask.shape
-    # compute the perspective transform matrix and then apply it
     
-    M = cv2.getPerspectiveTransform(box.astype(dtype = np.float32), dst)
+    # compute the perspective transform matrix and then apply it
+    M = cv2.getPerspectiveTransform(pts.astype(dtype = np.float32), dst)
     warped_temp = cv2.warpPerspective(image, M, (cols, rows))
     warped_mask_temp = cv2.warpPerspective(mask, M, (cols, rows))
     
@@ -503,10 +412,11 @@ def affine_transform_warped(warped_mask):
     M = np.round(M, decimals = 3)
     return M
     
-def projective_transform(image, mask, D):
+def projective_transform(image, mask, D, do_save = False):
     """Obtain and apply projective transformtion
     
-    Requires roi to have sufficient padding!
+    Effectively replaces combination of four_point_tranform and affine_transform_warped.
+    Requires roi to have sufficient padding.
     
     Parameters
     ---------
@@ -516,13 +426,18 @@ def projective_transform(image, mask, D):
         boolean mask of the full ellipse contour
     D : float
         diameter of circular object in real-world dimensions [mm]
+    do_save : bool
+        flag indicating whether to save output to a np.array file
     
     Returns
     -----------
     M : 3x3 array
         projective transformation matrix
+    scaling_factor: float
+        [mm / pixel] scaling for conversion to real world dimensions
     warped : 2D array
         projective transformed image
+    warped_mask : 2D array  
     """
     contour = cv2.findContours( mask.copy(), cv2.RETR_EXTERNAL,
                                 cv2.CHAIN_APPROX_SIMPLE)[1][0]
@@ -551,14 +466,15 @@ def projective_transform(image, mask, D):
                         [ellip[0][0] + xshift, ellip[0][1] + minAx / 2],
                         [ellip[0][0] - xshift, ellip[0][1] - minAx / 2]])
     M = cv2.getPerspectiveTransform(pts_ellip, pts_circ)    
-    # debug_points(mask, ellip, circ, pts1, pts2)
+    # utils.debug_points(mask, ellip, circ, pts1, pts2)
     rows, cols = mask.shape
     warped_mask = cv2.warpPerspective(mask, M, (cols, rows))
     warped = cv2.warpPerspective(image, M, (cols, rows))
     
     scaling_factor = find_scale(warped_mask, D = D)
-    np.save("projection_matrix.npy", M)
-    np.save("scaling_factor.npy", scaling_factor)
+    if do_save:
+        np.save("projection_matrix.npy", M)
+        np.save("scaling_factor.npy", scaling_factor)
         
     return M, scaling_factor, warped, warped_mask
     
@@ -584,58 +500,74 @@ def find_scale(warped_mask, D):
     scaling = D / diameter
     return scaling
     
+def from_preset(video_src):
+    """Use preset values to find position in video and roi
     
-def debug_points(image, ellip, circ, pts1, pts2, pad = 0):
-    """Helper function to debug transformations
-    
-    Plots mapping of ellipse-circle point-pair coordinates
-    
+    Parameters
+    ------------
+    video_src : str
+        path to video
     """
-    import matplotlib.patches as mpatches
-    import matplotlib.lines as mlines
-    pad = 0
-    imageVis = image.copy()
-    (c,r) = circ
+    frame_pos = 194.0
+    pts = np.array([[158.0, 405.0],
+                   [1520.0, 405.0],
+                   [1520.0, 2389.0],
+                   [158.0, 2389.0]], dtype= np.int32)
+    (vid,_) = go_to_frame([], frame_pos, video_source = video_src)
+    _, frame = vid.read()
+    roi = frame[pts[0][0]:pts[1][0], pts[0][1]:pts[2][1],:]
+    return pts, roi, vid, frame_pos, frame
     
-    majAx = ellip[1][1]
-    minAx = ellip[1][0]
-    angle_rad = (90 - ellip[2]) * (2*np.pi / 360)
-    # Get directional shifts
-    xshift = np.sin(angle_rad) * (majAx / 2)
-    yshift = -np.sin(angle_rad) * (minAx / 2)
+def fit_undistort(frame, mtx, dist_coeffs, refit = False):
+    '''Apply camera-specific undistortion
     
-    fig, ax = plt.subplots(1,1, figsize = (12, 12))
-    #Add circle, centre, ellipse over the image
-    circle = plt.Circle((c[0], c[1]+pad), radius = r,
-                        fill = False, color = "r", linewidth = 2)
-    ellipse = mpatches.Ellipse((ellip[0][0], ellip[0][1] + pad),
-                                np.int(minAx), np.int(majAx), angle = ellip[2],
-                                fill = False, color = "b", linewidth = 4)
-    ax.add_artist(circle)
-    ax.add_artist(ellipse)
+    Eventually this function could apply undistortion, but the same function would
+    have to be called on each an every frame during processing and thus we may 
+    omit it.
     
-    ax.scatter( pts1[:, 0], pts1[:,1] + pad, s = 100, c = "c",
-                marker = "o", label = "Circle Pts")                       
-    ax.scatter( pts2[:, 0], pts2[:,1] + pad, s = 100, c = "m",
-                marker = "x", label = "Ellipse Pts")
+    Parameters
+    ------------
+    frame : ndarray
+        frame to be undistorted
+    mtx : 3x3 ndarray, float32
+        intrinsic camera matrix
+    dist_coeffs : np.array, float32
+        distortion coefficients
+    refit : bool
+        flag indicating whether to update intrinsic matrix
     
-    linestyles = ['--', ':']
-    for (ls, pts) in (zip(linestyles, [pts1, pts2])):
-        majAx_line = mlines.Line2D(pts[0:2, 0], pts[0:2,1]+pad, linestyle = ls)
-        minAx_line = mlines.Line2D(pts[2:4, 0], pts[2:4,1]+pad, linestyle = ls)
-        ax.add_line(majAx_line)
-        ax.add_line(minAx_line)
-    imageVis_pad = np.pad(imageVis, ((pad, pad), (0, 0)), mode = 'symmetric')
-    ax.imshow(imageVis_pad, cmap = "gray", alpha = 1)
-    plt.show()   
+    References
+    ---------
+    [1]http://opencv-python-tutroals.readthedocs.io/en/latest/py_tutorials/py_calib3d/py_calibration/py_calibration.html#undistortion
+    '''   
+    if refit: # Refit the intrinsic matrix
+        h, w = frame.shape[:2]
+        mtx_new, roi_crop = cv2.getOptimalNewCameraMatrix(
+                    mtx, dist_coeffs, imageSize = (w,h), alpha = 1, newImgSize = (w,h))
+        # undistort using the new found matrix
+        dst = cv2.undistort(frame, mtx, dist_coeffs, dst = None, newCameraMatrix = mtx_new)
+        # Crop empty pixels
+        x,y,w,h = roi_crop
+        dst = dst[y:y+h, x:x+w]
+        
+    else:
+        # Just apply undistortion with unchanged params
+        dst = cv2.undistort(frame, mtx, dist_coeffs)
+        
+    return dst
+    
     
 def main():
-    video_src = "videos/test.avi"
-    pts, roi, vid, frame_pos, _ = select_roi_video(video_src)
+    video_src = "tests\\res\\test.avi"
+    if update_roi:
+        pts, roi, vid, frame_pos, _ = select_roi_video(video_src)
+    else:
+        pts, roi, vid, frame_pos, _ = from_preset(video_src)
+        
     contour, gray = find_contours(roi)
     ellip, _, _= fit_ellipse(contour, gray)
-    box, mask, _ = mask_box_ellip(gray, ellip)
-    M, sf, _, _ = projective_transform(gray, mask, D = 1000)
+    pts, mask, _ = mask_box_ellip(gray, ellip)
+    M, sf, _, _ = projective_transform(gray, mask, D = 1050, do_save = do_save)
     
 if __name__ == '__main__':
     main()

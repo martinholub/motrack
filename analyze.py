@@ -40,4 +40,5 @@ with open(fname_out, "w") as f_out:
             else:
                 f_out.write("{:d}\n".format(0)) 
         # f.close is implicit
+# f.close is implicit
     

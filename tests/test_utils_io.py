@@ -52,3 +52,8 @@ class TestUtilsIO(object):
         assert vid_out.isOpened()
         vid_out.release()
         os.remove("out_" + out_name)
+    
+    # def test_confirm_overwrite(self):
+        # fnames = ["tests\\res\\test.avi", "tests\\res\\test.jpg"]
+        # ret_val = confirm_overwrite(fnames_list)
+        # assert ret_val == True

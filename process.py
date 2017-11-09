@@ -4,7 +4,23 @@ import os
 import subprocess
 import time
 import pandas as pd
-import utils 
+import utils
+import argparse
+
+# Parse arguments
+ap = argparse.ArgumentParser()
+ap.add_argument("-r", "--reproduce", type = str,
+                help= "reproduce process without user interaction", 
+                default = 0)
+try:
+    args = ap.parse_args()
+    skip_initialization = args.reproduce 
+except Exception as ex: 
+    template = "An exception of type {0} occurred. Arguments:\n{1!r}"
+    message = template.format(type(ex).__name__, ex.args)
+    print(message)
+    skip_initialization = 0
+    
 basepath = "vids\\"
 file_name = "*.avi"
 csv_name = "vids\\start_stop.csv"
@@ -27,7 +43,8 @@ for i, fname in enumerate(list(glob.glob(basepath + file_name))):
         base_call.extend(["-fr", frame_range])
     
     if i == 0:
-        continue
+        if skip_initialization:
+            continue; 
         base_call.extend(["-p", "params_init"])
         call = base_call
     if i > 0:
@@ -40,4 +57,3 @@ for i, fname in enumerate(list(glob.glob(basepath + file_name))):
     
     print(fname)
     print(check_status + timing)
-    if i > 0 :break

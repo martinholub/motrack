@@ -38,7 +38,7 @@ class TestMotrackProcess(object):
         retval, frame = vid.read()
         frame_avg = np.zeros_like(frame, dtype = np.float32)
         frame_avg, _, _ = motrack.average_frames(vid, frame_avg)
-        assert np.round(np.sum(frame_avg) / frame_avg.size) == 92.0
+        assert np.round(np.sum(frame_avg) / frame_avg.size) == 87.0
         vid.release()
         
     def test_get_roi_hist(self, roi_hist_tuple):

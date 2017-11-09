@@ -1,8 +1,10 @@
 # Custom files/folders
 videos/*
+vids/*
+old/*
 resources/*.png
 resources/*
-tests/res/*.avi
+tests/res/*
 *.txt
 *.dat
 *.mp4
@@ -12,3 +14,4 @@ tests/res/*.avi
 # Some general ignores
 .ipynb_checkpoints/
 __pycache__/
+.cache/
