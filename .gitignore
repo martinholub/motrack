@@ -1,17 +1,6 @@
-# Custom files/folders
-videos/*
-vids/*
-old/*
-resources/*.png
-resources/*
-tests/res/*
-*.txt
-*.dat
-*.mp4
-*.m4v
-*.avi
-
 # Some general ignores
 .ipynb_checkpoints/
 __pycache__/
 .cache/
+*.eggs/*
+*.egg-info/*

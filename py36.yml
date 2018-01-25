@@ -84,5 +84,4 @@ dependencies:
   - jupyter-core==4.3.0
   - opencv-contrib-python==3.3.0.9
   - prompt-toolkit==1.0.15
-prefix: C:\Users\MartinH.PHARPCMORPHWK1\Miniconda2\envs\py36
 

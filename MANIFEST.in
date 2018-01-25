@@ -1,0 +1,5 @@
+global-include dummy-file
+include README
+include py36
+graft motrack/src
+graft tests
