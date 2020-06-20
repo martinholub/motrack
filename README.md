@@ -54,7 +54,7 @@ Several parameters get saved during the processing of each video. You will find 
 
 # Tests 
 
-You may test that the code runs as expected by invoking `python -m pytest`. You will need to put necessary files to `tests\res` folder and you can find them in `~\EIN Group\MartinHolub\motion-tracking\tests\res`.
+You may test that the code runs as expected by invoking `python -m pytest`.
 
 ### Reporting issues
 
